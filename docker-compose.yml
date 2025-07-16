@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rinha-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - rinha-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "100MB"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rinha-backend:
+    build: .
+    container_name: rinha-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
+      - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
+      - PAYMENT_WORKERS=10
+      - PAYMENT_CHANNEL_SIZE=100
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - rinha-network
+      - payment-processor
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "200MB"
+
+networks:
+  rinha-network:
+    driver: bridge
+  payment-processor:
+    external: true 
