@@ -1,3 +1,4 @@
+# max 1.5 and 350mb
 version: '3.8'
 
 services:
@@ -18,7 +19,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
+      
   rinha-backend:
     build: .
     container_name: rinha-backend
@@ -46,4 +47,4 @@ networks:
   rinha-network:
     driver: bridge
   payment-processor:
-    external: true 
+    external: true

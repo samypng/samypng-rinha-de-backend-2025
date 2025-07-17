@@ -2,7 +2,7 @@
 
 echo "Starting payment processors..."
 cd payment-processor
-docker-compose -f docker-compose.yml up -d
+docker-compose -f docker-compose-arm64.yml up -d
 cd ..
 
 echo "Waiting for payment processors to start..."

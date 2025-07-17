@@ -7,7 +7,7 @@ docker-compose down
 
 echo "Stopping payment processors..."
 cd payment-processor
-docker-compose -f docker-compose.yml down
+docker-compose -f docker-compose-arm64.yml down
 cd ..
 
 echo "All services stopped!" 

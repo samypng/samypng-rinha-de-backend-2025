@@ -12,16 +12,16 @@ import (
 	"os"
 	"rinha-backend-2025/types"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/gofrs/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
 type PaymentProcessor struct {
-	rdb         *redis.Client
-	ctx         context.Context
+	RDB         *redis.Client
+	CTX         context.Context
 	workerPool  *WorkerPool
 	paymentChan chan types.Payment
 }
@@ -61,8 +61,8 @@ func NewPaymentProcessor(rdb *redis.Client, ctx context.Context) *PaymentProcess
 	paymentChan := make(chan types.Payment, paymentChannelSize)
 
 	processor := &PaymentProcessor{
-		rdb:         rdb,
-		ctx:         ctx,
+		RDB:         rdb,
+		CTX:         ctx,
 		paymentChan: paymentChan,
 	}
 
@@ -132,55 +132,71 @@ func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 	if paymentHost == "" {
 		return errors.New("payment host is not set")
 	}
+	isDefaultProcessor := true
 	paymentHostHealthy := p.IsPaymentHostHealthy(paymentHost, false)
 	if !paymentHostHealthy {
 		paymentHost = os.Getenv("PAYMENT_HOST_FALLBACK")
+		isDefaultProcessor = false
 		paymentHostHealthy = p.IsPaymentHostHealthy(paymentHost, true)
 		if !paymentHostHealthy {
 			if err := p.SendPaymentToQueue(payment); err != nil {
-				return fmt.Errorf("failed to send payment to retry queue: %w", err)
+				return fmt.Errorf("failed to send payment to queue: %w", err)
 			}
-			return fmt.Errorf("both payment hosts are unhealthy, payment sent to retry queue")
+			return fmt.Errorf("both payment hosts are unhealthy, payment should retry")
 		}
 	}
-
+	RequestedAt := time.Now().UTC()
+	payment.RequestedAt = RequestedAt.Format(time.RFC3339)
 	host := fmt.Sprintf("%s/payments", paymentHost)
-	payment.RequestedAt = time.Now().UTC().Format(time.RFC3339)
 	paymentData, err := json.Marshal(payment)
 	if err != nil {
-		return fmt.Errorf("failed to marshal payment data: %w", err)
+		if err := p.SendPaymentToQueue(payment); err != nil {
+			return fmt.Errorf("failed to send payment to queue: %w", err)
+		}
+		return fmt.Errorf("failed to marshal payment data, payment should retry: %w", err)
 	}
-	req, err := http.NewRequestWithContext(p.ctx, http.MethodPost, host, io.NopCloser(bytes.NewBuffer(paymentData)))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
+	req, _ := http.NewRequestWithContext(p.CTX, http.MethodPost, host, io.NopCloser(bytes.NewBuffer(paymentData)))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if err := p.SendPaymentToQueue(payment); err != nil {
-			return fmt.Errorf("failed to send payment to retry queue: %w", err)
+			return fmt.Errorf("failed to send payment to queue: %w", err)
 		}
-		return fmt.Errorf("failed to process payment: %w, payment sent to retry queue", err)
+		return fmt.Errorf("failed to process payment: %w, payment should retry", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		if err := p.SendPaymentToQueue(payment); err != nil {
-			return fmt.Errorf("failed to send payment to retry queue: %w", err)
+			return fmt.Errorf("failed to send payment to queue: %w", err)
 		}
-		return fmt.Errorf("payment processing failed with status code: %d, payment sent to retry queue", resp.StatusCode)
+		return fmt.Errorf("payment processing failed with status code: %d, payment should retry", resp.StatusCode)
+	}
+	payment.Processed = true
+	payment.IsDefaultProcessor = isDefaultProcessor
+	paymentBytes, _ := json.Marshal(payment)
+	pipe := p.RDB.Pipeline()
+	requestedAtUnix := RequestedAt.Unix()
+	pipe.ZAdd(p.CTX, "payments_by_date", redis.Z{
+		Score:  float64(requestedAtUnix),
+		Member: fmt.Sprintf("%s|%.2f|%t", payment.CorrelationID, payment.Amount, payment.IsDefaultProcessor),
+	})
+	pipe.HSet(p.CTX, "payments", payment.CorrelationID, paymentBytes)
+	_, err = pipe.Exec(p.CTX)
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
 // IsPaymentHostHealthy checks if the payment host is healthy by querying its health endpoint.
 func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string, isFallback bool) bool {
-	paymentHostHealth, err := p.rdb.HGet(p.ctx, "payment_hosts:health", paymentHost).Result()
+	paymentHostHealth, err := p.RDB.HGet(p.CTX, "payment_hosts:health_status", paymentHost).Result()
 	if err != nil {
 		paymentHostHealthStatusPayload, err := p.GetHealthCheck(paymentHost)
 		if err != nil {
 			return false
 		}
-		p.rdb.HSet(p.ctx, "payment_hosts:health", paymentHost, paymentHostHealthStatusPayload, time.Minute*1)
+		p.RDB.HSet(p.CTX, "payment_hosts:health_status", paymentHost, paymentHostHealthStatusPayload, time.Second*30)
 		return true
 	}
 	var paymentHostHealthStatusPayload types.PaymentHostHealthStatusPayload
@@ -193,10 +209,16 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string, isFallback b
 
 // GetHealthCheck queries the health endpoint of the payment host and returns its health status.
 func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHostHealthStatusPayload, error) {
-	healthCheckHost := fmt.Sprintf("%s/health", paymentHost)
+	healthCheckHost := fmt.Sprintf("%s/payments/service-health", paymentHost)
 	healthCheckResponse, err := http.Get(healthCheckHost)
 	if err != nil {
 		return types.PaymentHostHealthStatusPayload{}, err
+	}
+	if healthCheckResponse.StatusCode != http.StatusOK {
+		return types.PaymentHostHealthStatusPayload{
+			Failing:         false,
+			MinResponseTime: 0,
+		}, nil
 	}
 	defer healthCheckResponse.Body.Close()
 	body, err := io.ReadAll(healthCheckResponse.Body)
@@ -213,22 +235,28 @@ func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHost
 
 // SendPaymentToQueue sends the payment to the Redis queue for processing.
 func (p *PaymentProcessor) SendPaymentToQueue(payment types.Payment) error {
-	jobID, _ := uuid.NewV4()
-	p.rdb.LPush(p.ctx, "payments", jobID.String())
-	p.rdb.HSet(p.ctx, "payments", jobID, payment)
+	jobID := payment.CorrelationID
+	payment.Processed = false
+	paymentBytes, _ := json.Marshal(payment)
+	pipe := p.RDB.Pipeline()
+	pipe.HSet(p.CTX, "payments", jobID, paymentBytes)
+	pipe.LPush(p.CTX, "payments_jobs", jobID)
+	_, err := pipe.Exec(p.CTX)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 // ProcessQueue processes payments from the Redis queue.
 func (p *PaymentProcessor) ProcessQueue() error {
-
 	for {
-		job, err := p.rdb.BLPop(p.ctx, 0*time.Second, "payments").Result()
+		job, err := p.RDB.BLPop(p.CTX, 0*time.Second, "payments_jobs").Result()
 		if err != nil {
 			continue
 		}
 		jobID := job[1]
-		paymentData, err := p.rdb.HGet(p.ctx, "payments", jobID).Result()
+		paymentData, err := p.RDB.HGet(p.CTX, "payments", jobID).Result()
 		if err != nil {
 			continue
 		}
@@ -239,4 +267,44 @@ func (p *PaymentProcessor) ProcessQueue() error {
 		}
 		p.paymentChan <- payment
 	}
+}
+
+// GetPaymentsSummary retrieves the payment summary for a given date range.
+func (p *PaymentProcessor) GetPaymentsSummary(startDate, endDate int64) (map[string]*types.PaymentSummary, error) {
+	members, err := p.RDB.ZRangeByScore(p.CTX, "payments_by_date", &redis.ZRangeBy{
+		Min: fmt.Sprintf("%d", startDate),
+		Max: fmt.Sprintf("%d", endDate),
+	}).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query payments by date range: %w", err)
+	}
+
+	summary := make(map[string]*types.PaymentSummary)
+	summary["default"] = &types.PaymentSummary{}
+	summary["fallback"] = &types.PaymentSummary{}
+
+	for _, member := range members {
+		parts := strings.Split(member, "|")
+		if len(parts) != 3 {
+			continue
+		}
+		amount, err := strconv.ParseFloat(parts[1], 64)
+		if err != nil {
+			continue
+		}
+		isDefaultProcessor, err := strconv.ParseBool(parts[2])
+		if err != nil {
+			continue
+		}
+
+		key := "default"
+		if !isDefaultProcessor {
+			key = "fallback"
+		}
+
+		summary[key].TotalRequests++
+		summary[key].TotalAmount += amount
+	}
+
+	return summary, nil
 }
