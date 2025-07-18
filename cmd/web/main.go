@@ -14,7 +14,6 @@ import (
 	"github.com/bytedance/sonic"
 
 	"github.com/go-playground/validator/v10"
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 )

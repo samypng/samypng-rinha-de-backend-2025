@@ -28,4 +28,6 @@ rinha-backend-2025
 payment-processor/
 
 start.sh
-stop.sh 
+stop.sh
+
+nginx.conf 
