@@ -11,10 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bytedance/sonic"
+
 	"github.com/go-playground/validator/v10"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -85,9 +86,9 @@ func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 func main() {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: false,
+		JSONEncoder:           sonic.Marshal,
+		JSONDecoder:           sonic.Unmarshal,
 	})
-	app.Use(logger.New())
-
 	rdb := redis.NewClient(&redis.Options{
 		Addr: os.Getenv("REDIS_ADDR"),
 		DB:   0,
@@ -97,7 +98,7 @@ func main() {
 		log.Fatalf("Could not connect to Redis: %v", err)
 	}
 	handlers := &Handlers{
-		processor: internal.NewPaymentProcessor(rdb, ctx),
+		processor: internal.NewPaymentProcessor(ctx, rdb, &http.Client{}),
 	}
 
 	handlers.processor.StartWorkerPool()

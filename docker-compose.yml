@@ -19,8 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: rinha-redis
-    ports:
-      - "6379:6379"
+    command: redis-server --save "" --appendonly no --maxclients 20000
     networks:
       - rinha-network
     deploy:

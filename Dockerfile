@@ -1,4 +1,6 @@
-FROM golang:1.24.0-alpine AS builder
+FROM golang:1.24-alpine AS builder
+
+RUN go version
 
 WORKDIR /app
 
@@ -8,7 +10,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o rinha-backend-2025 .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o rinha-backend-2025 ./cmd/web/*.go
 
 FROM alpine:latest
 
@@ -20,4 +22,4 @@ COPY --from=builder /app/rinha-backend-2025 .
 
 EXPOSE 8000
 
-CMD ["./rinha-backend-2025"] 
+CMD ["./rinha-backend-2025"]

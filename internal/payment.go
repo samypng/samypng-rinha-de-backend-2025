@@ -3,8 +3,9 @@ package internal
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/bytedance/sonic"
+	"github.com/redis/go-redis/v9"
 	"io"
 	"log"
 	"net/http"
@@ -14,8 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -27,6 +26,7 @@ type PaymentProcessor struct {
 	RDB         *redis.Client
 	CTX         context.Context
 	workerPool  *WorkerPool
+	client      *http.Client
 	paymentChan chan types.Payment
 }
 
@@ -39,7 +39,7 @@ type WorkerPool struct {
 }
 
 // NewPaymentProcessor initializes a new PaymentProcessor with a Redis client and context.
-func NewPaymentProcessor(rdb *redis.Client, ctx context.Context) *PaymentProcessor {
+func NewPaymentProcessor(ctx context.Context, rdb *redis.Client, client *http.Client) *PaymentProcessor {
 	var numWorkers int
 	if envWorkers := os.Getenv("PAYMENT_WORKERS"); envWorkers != "" {
 		nw, err := strconv.Atoi(envWorkers)
@@ -68,6 +68,7 @@ func NewPaymentProcessor(rdb *redis.Client, ctx context.Context) *PaymentProcess
 		RDB:         rdb,
 		CTX:         ctx,
 		paymentChan: paymentChan,
+		client:      client,
 	}
 
 	workerPool := &WorkerPool{
@@ -181,7 +182,7 @@ func (p *PaymentProcessor) handleUnhealthyHosts(payment types.Payment, err error
 
 // Helper function to prepare payment data
 func (p *PaymentProcessor) preparePaymentData(payment types.Payment) ([]byte, error) {
-	paymentData, err := json.Marshal(payment)
+	paymentData, err := sonic.ConfigFastest.Marshal(payment)
 	if err != nil {
 		return nil, err
 	}
@@ -194,12 +195,11 @@ func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []
 		host := fmt.Sprintf("%s/payments", paymentHost)
 		req, _ := http.NewRequestWithContext(p.CTX, http.MethodPost, host, io.NopCloser(bytes.NewBuffer(paymentData)))
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := p.client.Do(req)
 		if err != nil {
 			return isDefaultProcessor, err
 		}
 		defer resp.Body.Close()
-
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity {
 			if isDefaultProcessor {
 				paymentHost = PaymentHostFallback
@@ -215,7 +215,7 @@ func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []
 // Helper function to save payment to Redis
 func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultProcessor bool, RequestedAt time.Time) error {
 	payment.IsDefaultProcessor = isDefaultProcessor
-	paymentBytes, _ := json.Marshal(payment)
+	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
 
 	pipe := p.RDB.Pipeline()
 	requestedAtUnix := RequestedAt.Unix()
@@ -246,10 +246,10 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 		if err != nil {
 			return false
 		}
-		paymentHostHealthStatusPayloadBytes, _ := json.Marshal(paymentHostHealthStatusPayload)
+		paymentHostHealthStatusPayloadBytes, _ := sonic.ConfigFastest.Marshal(paymentHostHealthStatusPayload)
 		pipe := p.RDB.Pipeline()
 		pipe.HSet(p.CTX, "payment_hosts:health_status", paymentHost, string(paymentHostHealthStatusPayloadBytes))
-		pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*10)
+		pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*30)
 		_, err = pipe.Exec(p.CTX)
 		if err != nil {
 			log.Printf("Failed to set health status for payment host %s: %v", paymentHost, err)
@@ -257,17 +257,17 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 		return false
 	}
 	var paymentHostHealthStatusPayload types.PaymentHostHealthStatusPayload
-	err = json.Unmarshal([]byte(paymentHostHealth), &paymentHostHealthStatusPayload)
+	err = sonic.ConfigFastest.Unmarshal([]byte(paymentHostHealth), &paymentHostHealthStatusPayload)
 	if err != nil {
 		return true
 	}
-	return !paymentHostHealthStatusPayload.Failing && paymentHostHealthStatusPayload.MinResponseTime < 500
+	return !paymentHostHealthStatusPayload.Failing && paymentHostHealthStatusPayload.MinResponseTime < 1000
 }
 
 // GetHealthCheck queries the health endpoint of the payment host and returns its health status.
 func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHostHealthStatusPayload, error) {
 	healthCheckHost := fmt.Sprintf("%s/payments/service-health", paymentHost)
-	healthCheckResponse, err := http.Get(healthCheckHost)
+	healthCheckResponse, err := p.client.Get(healthCheckHost)
 	if err != nil {
 		return types.PaymentHostHealthStatusPayload{}, err
 	}
@@ -283,7 +283,7 @@ func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHost
 		return types.PaymentHostHealthStatusPayload{}, err
 	}
 	var paymentHostHealthStatusPayload types.PaymentHostHealthStatusPayload
-	err = json.Unmarshal(body, &paymentHostHealthStatusPayload)
+	err = sonic.ConfigFastest.Unmarshal(body, &paymentHostHealthStatusPayload)
 	if err != nil {
 		return types.PaymentHostHealthStatusPayload{}, err
 	}
@@ -293,7 +293,7 @@ func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHost
 // SendPaymentToQueue sends the payment to the Redis queue for processing.
 func (p *PaymentProcessor) SendPaymentToQueue(payment types.Payment) error {
 	jobID := payment.CorrelationID
-	paymentBytes, _ := json.Marshal(payment)
+	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
 	pipe := p.RDB.Pipeline()
 	pipe.HSet(p.CTX, "payments", jobID, paymentBytes)
 	pipe.LPush(p.CTX, "payments_jobs", jobID)
@@ -317,7 +317,9 @@ func (p *PaymentProcessor) ProcessQueue() error {
 			continue
 		}
 		var payment types.Payment
-		err = json.Unmarshal([]byte(paymentData), &payment)
+		if err := sonic.ConfigFastest.Unmarshal([]byte(paymentData), &payment); err != nil {
+			continue
+		}
 		if err != nil {
 			continue
 		}
