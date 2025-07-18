@@ -1,30 +1,9 @@
-# max 1.5 and 350mb
 version: '3.8'
 
-services:
-  redis:
-    image: redis:7-alpine
-    container_name: rinha-redis
-    ports:
-      - "6379:6379"
-    networks:
-      - rinha-network
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "100MB"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      
-  rinha-backend:
+x-service-templates:
+  rinha-backend: &rinha-backend
     build: .
     container_name: rinha-backend
-    ports:
-      - "8000:8000"
     environment:
       - REDIS_ADDR=redis:6379
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
@@ -37,12 +16,71 @@ services:
     networks:
       - rinha-network
       - payment-processor
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rinha-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - rinha-network
     deploy:
       resources:
         limits:
-          cpus: "1.0"
+          cpus: "0.10"
           memory: "200MB"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  backend1:
+    <<: *rinha-backend
+    container_name: rinha-backend-1
+    hostname: rinha-backend-1
+    networks:
+      - rinha-network
+      - payment-processor
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "50MB"
+
+  backend2:
+    <<: *rinha-backend
+    container_name: rinha-backend-2
+    hostname: rinha-backend-2
+    networks:
+      - rinha-network
+      - payment-processor
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "50MB"
+
+  nginx:
+    image: nginx:alpine
+    container_name: rinha-nginx
+    ports:
+      - "9999:9999"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend1:
+        condition: service_started
+      backend2:
+        condition: service_started
+    networks:
+      - rinha-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: "50MB"
 networks:
   rinha-network:
     driver: bridge

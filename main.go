@@ -28,11 +28,9 @@ var validatorInstance = validator.New()
 func (h *Handlers) PaymentHandler(c *fiber.Ctx) error {
 	payment := new(types.Payment)
 	if err := c.BodyParser(payment); err != nil {
-		log.Printf("Error parsing payment: %v", err)
 		return c.SendStatus(http.StatusBadRequest)
 	}
 	if err := validatorInstance.Struct(payment); err != nil {
-		log.Printf("Validation error: %v", err)
 		return c.SendStatus(http.StatusBadRequest)
 	}
 	if exist, err := h.processor.RDB.HExists(h.processor.CTX, "payments", payment.CorrelationID).Result(); err != nil || exist {

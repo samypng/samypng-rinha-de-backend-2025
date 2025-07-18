@@ -101,11 +101,8 @@ func (wp *WorkerPool) worker(id int) {
 			if !ok {
 				return
 			}
-			if err := wp.processor.processPaymentInternal(payment); err != nil {
-				log.Printf("Worker %d error processing payment %s: %v", id, payment.CorrelationID, err)
-			}
+			wp.processor.processPaymentInternal(payment)
 		case <-wp.ctx.Done():
-			log.Printf("Worker %d shutting down due to context cancellation", id)
 			return
 		}
 	}
