@@ -7,7 +7,7 @@ x-service-templates:
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
       - PAYMENT_WORKERS=20
-      - PAYMENT_CHANNEL_SIZE=150
+      - PAYMENT_CHANNEL_SIZE=200
     depends_on:
       redis:
         condition: service_healthy

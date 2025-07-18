@@ -9,7 +9,7 @@ echo "Waiting for payment processors to start..."
 sleep 5
 
 echo "Starting main application..."
-docker-compose up -d
+docker-compose up -d --remove-orphans
 
 echo "All services started!"
 echo ""
