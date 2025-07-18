@@ -1,5 +1,3 @@
-version: '3.8'
-
 x-service-templates:
   rinha-backend: &rinha-backend
     build: .
@@ -8,8 +6,8 @@ x-service-templates:
       - REDIS_ADDR=redis:6379
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
-      - PAYMENT_WORKERS=10
-      - PAYMENT_CHANNEL_SIZE=100
+      - PAYMENT_WORKERS=20
+      - PAYMENT_CHANNEL_SIZE=150
     depends_on:
       redis:
         condition: service_healthy

@@ -103,8 +103,8 @@ func main() {
 	handlers.processor.StartWorkerPool()
 	go handlers.processor.ProcessQueue()
 
-	app.Post("/payment", handlers.PaymentHandler)
-	app.Get("/payments/summary", handlers.PaymentsSummaryHandler)
+	app.Post("/payments", handlers.PaymentHandler)
+	app.Get("/payments-summary", handlers.PaymentsSummaryHandler)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
