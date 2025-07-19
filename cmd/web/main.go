@@ -33,10 +33,6 @@ func (h *Handlers) PaymentHandler(c *fiber.Ctx) error {
 	if err := validatorInstance.Struct(payment); err != nil {
 		return c.SendStatus(http.StatusBadRequest)
 	}
-	if exist, err := h.processor.RDB.HExists(h.processor.CTX, "payments", payment.CorrelationID).Result(); err != nil || exist {
-		return c.SendStatus(http.StatusConflict)
-	}
-
 	go h.processor.ProcessPayment(*payment)
 
 	return c.SendStatus(http.StatusCreated)
@@ -95,6 +91,11 @@ func main() {
 	ctx := context.Background()
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		log.Fatalf("Could not connect to Redis: %v", err)
+		return
+	}
+	err := rdb.XGroupCreateMkStream(ctx, "payments", "payment-group", "0").Err()
+	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+		return
 	}
 	handlers := &Handlers{
 		processor: internal.NewPaymentProcessor(ctx, rdb, &http.Client{}),

@@ -6,8 +6,8 @@ x-service-templates:
       - REDIS_ADDR=redis:6379
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
-      - PAYMENT_WORKERS=20
-      - PAYMENT_CHANNEL_SIZE=200
+      - PAYMENT_WORKERS=150
+      - PAYMENT_CHANNEL_SIZE=1000
     depends_on:
       redis:
         condition: service_healthy
@@ -19,7 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: rinha-redis
-    command: redis-server --save "" --appendonly no --maxclients 20000
+    command: redis-server --save "" --appendonly no --maxclients 20000 
     networks:
       - rinha-network
     deploy:

@@ -10,7 +10,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o rinha-backend-2025 ./cmd/web/*.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o rinha-backend-2025 ./cmd/web/*.go
 
 FROM alpine:latest
 

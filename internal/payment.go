@@ -20,6 +20,7 @@ import (
 var (
 	PaymentHostDefault  = os.Getenv("PAYMENT_HOST_DEFAULT")
 	PaymentHostFallback = os.Getenv("PAYMENT_HOST_FALLBACK")
+	BatchSize           = 400
 )
 
 type PaymentProcessor struct {
@@ -86,7 +87,7 @@ func NewPaymentProcessor(ctx context.Context, rdb *redis.Client, client *http.Cl
 func (wp *WorkerPool) Start() {
 	for i := 0; i < wp.numWorkers; i++ {
 		wp.wg.Add(1)
-		go wp.worker(i)
+		go wp.worker()
 	}
 }
 
@@ -97,7 +98,7 @@ func (wp *WorkerPool) Stop() {
 }
 
 // worker processes payments from the payment channel.
-func (wp *WorkerPool) worker(id int) {
+func (wp *WorkerPool) worker() {
 	defer wp.wg.Done()
 
 	for {
@@ -215,8 +216,6 @@ func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []
 // Helper function to save payment to Redis
 func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultProcessor bool, RequestedAt time.Time) error {
 	payment.IsDefaultProcessor = isDefaultProcessor
-	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
-
 	pipe := p.RDB.Pipeline()
 	requestedAtUnix := RequestedAt.Unix()
 
@@ -224,8 +223,6 @@ func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultPr
 		Score:  float64(requestedAtUnix),
 		Member: fmt.Sprintf("%s|%.2f|%t", payment.CorrelationID, payment.Amount, payment.IsDefaultProcessor),
 	})
-	pipe.HSet(p.CTX, "payments", payment.CorrelationID, paymentBytes)
-
 	_, err := pipe.Exec(p.CTX)
 	return err
 }
@@ -242,17 +239,22 @@ func (p *PaymentProcessor) handlePaymentError(payment types.Payment, err error, 
 func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 	paymentHostHealth, err := p.RDB.HGet(p.CTX, "payment_hosts:health_status", paymentHost).Result()
 	if err != nil {
-		paymentHostHealthStatusPayload, err := p.GetHealthCheck(paymentHost)
-		if err != nil {
-			return false
-		}
-		paymentHostHealthStatusPayloadBytes, _ := sonic.ConfigFastest.Marshal(paymentHostHealthStatusPayload)
-		pipe := p.RDB.Pipeline()
-		pipe.HSet(p.CTX, "payment_hosts:health_status", paymentHost, string(paymentHostHealthStatusPayloadBytes))
-		pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*30)
-		_, err = pipe.Exec(p.CTX)
-		if err != nil {
-			log.Printf("Failed to set health status for payment host %s: %v", paymentHost, err)
+		if err == redis.Nil {
+			go func() {
+				paymentHostHealthStatusPayload, err := p.GetHealthCheck(paymentHost)
+				if err != nil {
+					return
+				}
+				paymentHostHealthStatusPayloadBytes, _ := sonic.ConfigFastest.Marshal(paymentHostHealthStatusPayload)
+				pipe := p.RDB.Pipeline()
+				pipe.HSet(p.CTX, "payment_hosts:health_status", paymentHost, string(paymentHostHealthStatusPayloadBytes))
+				pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*30)
+				_, err = pipe.Exec(p.CTX)
+				if err != nil {
+					log.Printf("Failed to set health status for payment host %s: %v", paymentHost, err)
+				}
+			}()
+			return true
 		}
 		return false
 	}
@@ -294,11 +296,17 @@ func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHost
 func (p *PaymentProcessor) SendPaymentToQueue(payment types.Payment) error {
 	jobID := payment.CorrelationID
 	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
-	pipe := p.RDB.Pipeline()
-	pipe.HSet(p.CTX, "payments", jobID, paymentBytes)
-	pipe.LPush(p.CTX, "payments_jobs", jobID)
-	_, err := pipe.Exec(p.CTX)
+	xAddArgs := &redis.XAddArgs{
+		Stream: "payments",
+		Values: map[string]interface{}{
+			"jobID":   jobID,
+			"payment": string(paymentBytes),
+		},
+	}
+
+	_, err := p.RDB.XAdd(p.CTX, xAddArgs).Result()
 	if err != nil {
+		log.Printf("Failed to send payment to Redis queue: %v", err)
 		return err
 	}
 	return nil
@@ -307,23 +315,27 @@ func (p *PaymentProcessor) SendPaymentToQueue(payment types.Payment) error {
 // ProcessQueue processes payments from the Redis queue.
 func (p *PaymentProcessor) ProcessQueue() error {
 	for {
-		job, err := p.RDB.BLPop(p.CTX, 0*time.Second, "payments_jobs").Result()
+		streams, err := p.RDB.XReadGroup(p.CTX, &redis.XReadGroupArgs{
+			Group:    "payment-group",
+			Consumer: "payment-consumer",
+			Streams:  []string{"payments", ">"},
+			Block:    0,
+			NoAck:    true,
+		}).Result()
 		if err != nil {
 			continue
 		}
-		jobID := job[1]
-		paymentData, err := p.RDB.HGet(p.CTX, "payments", jobID).Result()
-		if err != nil {
-			continue
+		for _, stream := range streams {
+			for _, message := range stream.Messages {
+				paymentData := message.Values["payment"].(string)
+				var payment types.Payment
+				if err := sonic.ConfigFastest.Unmarshal([]byte(paymentData), &payment); err != nil {
+					continue
+				}
+				p.paymentChan <- payment
+			}
 		}
-		var payment types.Payment
-		if err := sonic.ConfigFastest.Unmarshal([]byte(paymentData), &payment); err != nil {
-			continue
-		}
-		if err != nil {
-			continue
-		}
-		p.paymentChan <- payment
+
 	}
 }
 
