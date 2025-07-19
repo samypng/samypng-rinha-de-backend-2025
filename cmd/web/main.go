@@ -102,7 +102,7 @@ func main() {
 	}
 
 	handlers.processor.StartWorkerPool()
-	go handlers.processor.ProcessQueue()
+	go handlers.processor.ProcessStream()
 
 	app.Post("/payments", handlers.PaymentHandler)
 	app.Get("/payments-summary", handlers.PaymentsSummaryHandler)

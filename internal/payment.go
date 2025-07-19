@@ -123,9 +123,9 @@ func (p *PaymentProcessor) StopWorkerPool() {
 	p.workerPool.Stop()
 }
 
-// ProcessPayment adds the payment to redis queue
+// ProcessPayment adds the payment to redis stream
 func (p *PaymentProcessor) ProcessPayment(payment types.Payment) error {
-	return p.SendPaymentToQueue(payment)
+	return p.SendPaymentToStream(payment)
 }
 
 // processPaymentInternal is the actual payment processing logic
@@ -174,8 +174,8 @@ func (p *PaymentProcessor) determinePaymentHost() (string, bool, error) {
 
 // Helper function to handle unhealthy hosts
 func (p *PaymentProcessor) handleUnhealthyHosts(payment types.Payment, err error) error {
-	if sendErr := p.SendPaymentToQueue(payment); sendErr != nil {
-		return fmt.Errorf("failed to send payment to queue: %w", sendErr)
+	if sendErr := p.SendPaymentToStream(payment); sendErr != nil {
+		return fmt.Errorf("failed to send payment to stream: %w", sendErr)
 	}
 	return fmt.Errorf("payment should retry: %w", err)
 }
@@ -228,7 +228,7 @@ func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultPr
 
 // Helper function to handle payment errors
 func (p *PaymentProcessor) handlePaymentError(payment types.Payment, err error, message string) error {
-	if sendErr := p.SendPaymentToQueue(payment); sendErr != nil {
+	if sendErr := p.SendPaymentToStream(payment); sendErr != nil {
 		return fmt.Errorf("%s: %w", message, sendErr)
 	}
 	return fmt.Errorf("%s: %w", message, err)
@@ -291,8 +291,8 @@ func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHost
 	return paymentHostHealthStatusPayload, nil
 }
 
-// SendPaymentToQueue sends the payment to the Redis queue for processing.
-func (p *PaymentProcessor) SendPaymentToQueue(payment types.Payment) error {
+// SendPaymentToStream sends the payment to the Redis stream for processing.
+func (p *PaymentProcessor) SendPaymentToStream(payment types.Payment) error {
 	jobID := payment.CorrelationID
 	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
 	xAddArgs := &redis.XAddArgs{
@@ -305,14 +305,14 @@ func (p *PaymentProcessor) SendPaymentToQueue(payment types.Payment) error {
 
 	_, err := p.RDB.XAdd(p.CTX, xAddArgs).Result()
 	if err != nil {
-		log.Printf("Failed to send payment to Redis queue: %v", err)
+		log.Printf("Failed to send payment to Redis stream: %v", err)
 		return err
 	}
 	return nil
 }
 
-// ProcessQueue processes payments from the Redis queue.
-func (p *PaymentProcessor) ProcessQueue() error {
+// ProcessStream processes payments from the Redis stream.
+func (p *PaymentProcessor) ProcessStream() error {
 	for {
 		streams, err := p.RDB.XReadGroup(p.CTX, &redis.XReadGroupArgs{
 			Group:    "payment-group",
