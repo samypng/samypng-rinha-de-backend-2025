@@ -4,7 +4,8 @@
 
 **Participante:** Samuel Silva  
 **Tecnologias:** Go, Fiber, Redis, PostgreSQL, Nginx, Docker  
-**Repositório:** [rinha-de-backend-2025-go](https://github.com/user/rinha-de-backend-2025-go)  
+**Repositório da Rinha:** [rinha-de-backend-2025](https://github.com/zanfranceschi/rinha-de-backend-2025)
+**Repositório:** [rinha-de-backend-2025-go](https://github.com/samypng/rinha-de-backend-2025-go)  
 **Contato:** samuelsilva1997@hotmail.com  
 
 ---
@@ -114,7 +115,7 @@ O projeto utiliza uma arquitetura multi-container:
 
 ```bash
 # Clone o repositório
-git clone https://github.com/user/rinha-de-backend-2025-go
+git clone https://github.com/samypng/rinha-de-backend-2025-go
 cd rinha-de-backend-2025-go
 
 # Inicie todos os serviços
