@@ -93,10 +93,6 @@ func main() {
 		log.Fatalf("Could not connect to Redis: %v", err)
 		return
 	}
-	if err := rdb.FlushAll(ctx).Err(); err != nil {
-		log.Fatalf("Could not flush Redis: %v", err)
-		return
-	}
 	err := rdb.XGroupCreateMkStream(ctx, "payments", "payment-group", "0").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		return
