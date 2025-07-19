@@ -5,7 +5,7 @@
 **Participante:** Samuel Silva  
 **Tecnologias:** Go, Fiber, Redis, PostgreSQL, Nginx, Docker  
 **Repositório:** [rinha-de-backend-2025-go](https://github.com/user/rinha-de-backend-2025-go)  
-**Contato:** samuel.silva@email.com  
+**Contato:** samuelsilva1997@hotmail.com  
 
 ---
 
