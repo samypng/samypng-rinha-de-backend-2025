@@ -14,7 +14,7 @@ docker-compose up -d --remove-orphans
 echo "All services started!"
 echo ""
 echo "🔗 Service URLs:"
-echo "  - Main App:                http://localhost:8000"
+echo "  - App:                http://localhost:9999"
 echo "  - Payment Processor (Default): http://localhost:8001"
 echo "  - Payment Processor (Fallback): http://localhost:8002"
 echo "  - Redis:                   localhost:6379"

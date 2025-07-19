@@ -1,6 +1,6 @@
 x-service-templates:
   rinha-backend: &rinha-backend
-    build: .
+    image: samsam1997/rinha-backend-2025:latest
     container_name: rinha-backend
     environment:
       - REDIS_ADDR=redis:6379

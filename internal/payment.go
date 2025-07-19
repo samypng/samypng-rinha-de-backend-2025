@@ -20,7 +20,6 @@ import (
 var (
 	PaymentHostDefault  = os.Getenv("PAYMENT_HOST_DEFAULT")
 	PaymentHostFallback = os.Getenv("PAYMENT_HOST_FALLBACK")
-	BatchSize           = 400
 )
 
 type PaymentProcessor struct {
