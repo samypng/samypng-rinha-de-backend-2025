@@ -12,38 +12,40 @@
 
 ## 🚀 Sobre o Projeto
 
-Esta é uma implementação para a Rinha de Backend 2025, focada em processamento de pagamentos com alta concorrência. A solução utiliza **worker pools** para controlar a concorrência, **Redis** para filas de retry, e **nginx** para balanceamento de carga.
+Esta é uma implementação para a Rinha de Backend 2025, focada em processamento de pagamentos com alta concorrência. A solução utiliza **streaming architecture** com **worker pools** para processar pagamentos em tempo real, **Redis** para filas e cache, e **nginx** para balanceamento de carga.
 
 ### 🎯 Características Principais
 
+- ✅ **Streaming Payment Processing** - Processamento de pagamentos em tempo real com streams
 - ✅ **Worker Pool Pattern** - Controle de concorrência com workers configuráveis
 - ✅ **Queue** - Filas Redis para reprocessamento de pagamentos
 - ✅ **Health Checks** - Verificação automática de saúde dos provedores de pagamento
 - ✅ **Fallback Strategy** - Alternância automática entre provedores primário/secundário
 - ✅ **Load Balancing** - Nginx com round-robin entre 2 instâncias
-- ✅ **Graceful Shutdown** - Finalização limpa dos workers
+- ✅ **Real-time Processing** - Streaming de pagamentos para baixa latência
 
 ---
 
 ## 🏗️ Arquitetura
 
 ```
-Internet → Nginx (port 9999) → [Backend1, Backend2] → Redis
-                                     ↓         ↓
-                               Worker Pool Worker Pool
-                                     ↓         ↓
-                             Payment Processors
+Internet → Nginx (port 9999) → [Backend1, Backend2] → Redis Streams
+                                     ↓         ↓              ↓
+                               Worker Pool Worker Pool   Stream Consumer
+                                     ↓         ↓              ↓
+                             Payment Processors ←──── Payment Stream
 ```
 
 ### 📊 Recursos
 
 - **CPU Total:** 1.5 unidades
-- **Memória Total:** 250MB
+- **Memória Total:** 350MB
 - **Instâncias Backend:** 2 (0.5 CPU, 50MB cada)
 - **Nginx:** 0.4 CPU, 50MB
 - **Redis:** 0.1 CPU, 200MB
 - **Workers por instância:** 150 (configurável)
-- **Queue Size:** 1000 pagamentos por instância
+- **Stream Buffer:** 1000 pagamentos por instância
+- **Processing Mode:** Real-time streaming
 
 ---
 
@@ -96,11 +98,11 @@ GET /payments-summary
 
 ### 🐳 Docker Compose
 
-O projeto utiliza uma arquitetura multi-container:
+O projeto utiliza uma arquitetura multi-container com streaming:
 
-- **backend1/backend2:** Instâncias da aplicação Go
+- **backend1/backend2:** Instâncias da aplicação Go com stream processing
 - **nginx:** Load balancer na porta 9999
-- **redis:** Fila e cache de health checks
+- **redis:** Redis Streams, filas e cache de health checks
 - **payment-processors:** Serviços externos simulados
 
 ---
@@ -138,6 +140,43 @@ cd rinha-de-backend-2025-go
 - **Payment Processor (Default):** http://localhost:8001
 - **Payment Processor (Fallback):** http://localhost:8002
 - **Redis:** localhost:6379 (interno)
+
+---
+
+## 🌊 Arquitetura de Streaming
+
+### 📡 Como Funciona o Stream Processing
+
+A aplicação utiliza **Redis Streams** para processamento de pagamentos em tempo real:
+
+```
+1. POST /payment → Queue no Redis Stream
+2. Worker Pool consome Stream → Processa pagamento
+3. Health Check & Fallback → Provider Selection
+4. Payment Processing → External API calls
+5. Stream Acknowledgment → Payment completed
+```
+
+### 🔄 Fluxo de Processamento
+
+- **Ingestion:** Pagamentos são adicionados ao Redis Stream instantaneamente
+- **Processing:** Workers consomem streams em paralelo com controle de concorrência
+- **Resilience:** Falhas são automaticamente reprocessadas via stream groups
+
+### 🧪 Teste Rápido
+
+```bash
+# Enviar pagamento para stream
+curl -X POST http://localhost:9999/payment \
+  -H "Content-Type: application/json" \
+  -d '{
+    "correlation_id": "stream-payment-001",
+    "amount": 2500
+  }'
+
+# Verificar métricas de processamento
+curl http://localhost:9999/payments-summary
+```
 
 ---
 
