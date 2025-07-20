@@ -4,17 +4,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/bytedance/sonic"
-	"github.com/redis/go-redis/v9"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"rinha-backend-2025/types"
+	"rinha-backend-2025/internal/types"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bytedance/sonic"
+	"github.com/redis/go-redis/v9"
 )
 
 var (

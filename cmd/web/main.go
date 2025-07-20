@@ -2,81 +2,19 @@ package main
 
 import (
 	"context"
+	"github.com/bytedance/sonic"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"rinha-backend-2025/internal"
-	"rinha-backend-2025/types"
+	"rinha-backend-2025/internal/handlers"
+	"rinha-backend-2025/internal/payment"
 	"syscall"
 	"time"
 
-	"github.com/bytedance/sonic"
-
-	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 )
-
-type Handlers struct {
-	processor *internal.PaymentProcessor
-}
-
-var validatorInstance = validator.New()
-
-// ProcessPayment processes a payment by sending it to redis queue.
-func (h *Handlers) PaymentHandler(c *fiber.Ctx) error {
-	payment := new(types.Payment)
-	if err := c.BodyParser(payment); err != nil {
-		return c.SendStatus(http.StatusBadRequest)
-	}
-	if err := validatorInstance.Struct(payment); err != nil {
-		return c.SendStatus(http.StatusBadRequest)
-	}
-	go h.processor.ProcessPayment(*payment)
-
-	return c.SendStatus(http.StatusCreated)
-}
-
-// PaymentsSummaryHandler retrieves the payment summary for a given date range.
-func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
-	fromISO := c.Query("from")
-	toISO := c.Query("to")
-	if fromISO == "" || toISO == "" {
-		return c.SendStatus(http.StatusBadRequest)
-	}
-
-	fromTime, err := time.Parse(time.RFC3339, fromISO)
-	if err != nil {
-		return c.SendStatus(http.StatusBadRequest)
-	}
-	toTime, err := time.Parse(time.RFC3339, toISO)
-	if err != nil {
-		return c.SendStatus(http.StatusBadRequest)
-	}
-
-	from := fromTime.Unix()
-	to := toTime.Unix()
-
-	summary, err := h.processor.GetPaymentsSummary(from, to)
-	if err != nil {
-		return c.SendStatus(http.StatusInternalServerError)
-	}
-
-	if _, ok := summary["default"]; !ok {
-		summary["default"] = &types.PaymentSummary{
-			TotalRequests: 0,
-			TotalAmount:   0.0,
-		}
-	}
-	if _, ok := summary["fallback"]; !ok {
-		summary["fallback"] = &types.PaymentSummary{
-			TotalRequests: 0,
-			TotalAmount:   0.0,
-		}
-	}
-	return c.Status(http.StatusOK).JSON(summary)
-}
 
 func main() {
 	app := fiber.New(fiber.Config{
@@ -97,12 +35,12 @@ func main() {
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		return
 	}
-	handlers := &Handlers{
-		processor: internal.NewPaymentProcessor(ctx, rdb, &http.Client{}),
+	handlers := &handlers.Handlers{
+		Processor: internal.NewPaymentProcessor(ctx, rdb, &http.Client{}),
 	}
 
-	handlers.processor.StartWorkerPool()
-	go handlers.processor.ProcessStream()
+	handlers.Processor.StartWorkerPool()
+	go handlers.Processor.ProcessStream()
 
 	app.Post("/payments", handlers.PaymentHandler)
 	app.Get("/payments-summary", handlers.PaymentsSummaryHandler)
@@ -130,6 +68,6 @@ func main() {
 		log.Printf("Error during server shutdown: %v", err)
 	}
 
-	handlers.processor.StopWorkerPool()
+	handlers.Processor.StopWorkerPool()
 
 }
