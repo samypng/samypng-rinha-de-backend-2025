@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"github.com/bytedance/sonic"
+	"github.com/gofiber/fiber/v2/middleware/logger"
 	"log"
 	"net/http"
 	"os"
@@ -17,11 +18,15 @@ import (
 )
 
 func main() {
+	debug := os.Getenv("DEBUG")
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: false,
 		JSONEncoder:           sonic.Marshal,
 		JSONDecoder:           sonic.Unmarshal,
 	})
+	if debug != "" && debug != "0" && debug != "false" {
+		app.Use(logger.New())
+	}
 	rdb := redis.NewClient(&redis.Options{
 		Addr: os.Getenv("REDIS_ADDR"),
 		DB:   0,

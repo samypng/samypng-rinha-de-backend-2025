@@ -1,13 +1,13 @@
 x-service-templates:
   rinha-backend: &rinha-backend
-    image: samsam1997/rinha-backend-2025:latest
-    container_name: rinha-backend
+    image: samsam1997/rinha-backend-2025:2.0
     environment:
       - REDIS_ADDR=redis:6379
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
       - PAYMENT_WORKERS=150
       - PAYMENT_CHANNEL_SIZE=1000
+      - DEBUG=false
     depends_on:
       redis:
         condition: service_healthy

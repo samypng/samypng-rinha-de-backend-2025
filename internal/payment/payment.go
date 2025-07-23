@@ -21,6 +21,7 @@ import (
 var (
 	PaymentHostDefault  = os.Getenv("PAYMENT_HOST_DEFAULT")
 	PaymentHostFallback = os.Getenv("PAYMENT_HOST_FALLBACK")
+	IsDebugMode         = os.Getenv("DEBUG") != "" && os.Getenv("DEBUG") != "0" && os.Getenv("DEBUG") != "false"
 )
 
 type PaymentProcessor struct {
@@ -131,6 +132,7 @@ func (p *PaymentProcessor) ProcessPayment(payment types.Payment) error {
 
 // processPaymentInternal is the actual payment processing logic
 func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
+	p.showLogs(fmt.Sprintf("Processing payment: %s", payment.CorrelationID))
 	paymentHost, isDefaultProcessor, err := p.determinePaymentHost()
 	if err != nil {
 		return p.handleUnhealthyHosts(payment, err)
@@ -145,14 +147,16 @@ func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 
 	isDefaultProcessor, err = p.sendPaymentRequest(paymentHost, paymentData, isDefaultProcessor)
 	if err != nil {
+		p.showLogs(fmt.Sprintf("Payment processing failed for %s: %v", payment.CorrelationID, err))
 		return p.handlePaymentError(payment, err, "failed to process payment")
 	}
 
 	err = p.savePaymentToRedis(payment, isDefaultProcessor, RequestedAt)
 	if err != nil {
+		p.showLogs(fmt.Sprintf("Failed to save payment to Redis: %v", err))
 		return p.handlePaymentError(payment, err, "failed to save payment to Redis")
 	}
-
+	p.showLogs(fmt.Sprintf("Payment processed successfully: %s", payment.CorrelationID))
 	return nil
 }
 
@@ -176,6 +180,7 @@ func (p *PaymentProcessor) determinePaymentHost() (string, bool, error) {
 // Helper function to handle unhealthy hosts
 func (p *PaymentProcessor) handleUnhealthyHosts(payment types.Payment, err error) error {
 	if sendErr := p.SendPaymentToStream(payment); sendErr != nil {
+		p.showLogs(fmt.Sprintf("Failed to send payment to stream: %v", sendErr))
 		return fmt.Errorf("failed to send payment to stream: %w", sendErr)
 	}
 	return fmt.Errorf("payment should retry: %w", err)
@@ -251,7 +256,7 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 				pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*30)
 				_, err = pipe.Exec(p.CTX)
 				if err != nil {
-					log.Printf("Failed to set health status for payment host %s: %v", paymentHost, err)
+					p.showLogs(fmt.Sprintf("Failed to set health status for payment host %s: %v", paymentHost, err))
 				}
 			}()
 			return true
@@ -306,7 +311,7 @@ func (p *PaymentProcessor) SendPaymentToStream(payment types.Payment) error {
 
 	_, err := p.RDB.XAdd(p.CTX, xAddArgs).Result()
 	if err != nil {
-		log.Printf("Failed to send payment to Redis stream: %v", err)
+		p.showLogs(fmt.Sprintf("Failed to send payment to Redis stream: %v", err))
 		return err
 	}
 	return nil
@@ -377,4 +382,10 @@ func (p *PaymentProcessor) GetPaymentsSummary(startDate, endDate int64) (map[str
 	}
 
 	return summary, nil
+}
+
+func (p *PaymentProcessor) showLogs(msg string) {
+	if IsDebugMode {
+		log.Println(msg)
+	}
 }
