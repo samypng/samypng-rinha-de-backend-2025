@@ -94,6 +94,7 @@ func (wp *WorkerPool) Start() {
 
 // Stop gracefully stops the worker pool by closing the payment channel and waiting for workers to finish.
 func (wp *WorkerPool) Stop() {
+	wp.ctx.Done()
 	close(wp.paymentChan)
 	wp.wg.Wait()
 }
@@ -253,7 +254,7 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 				paymentHostHealthStatusPayloadBytes, _ := sonic.ConfigFastest.Marshal(paymentHostHealthStatusPayload)
 				pipe := p.RDB.Pipeline()
 				pipe.HSet(p.CTX, "payment_hosts:health_status", paymentHost, string(paymentHostHealthStatusPayloadBytes))
-				pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*30)
+				pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*6)
 				_, err = pipe.Exec(p.CTX)
 				if err != nil {
 					logs.ShowLogs(fmt.Sprintf("Failed to set health status for payment host %s: %v", paymentHost, err))
@@ -382,4 +383,15 @@ func (p *PaymentProcessor) GetPaymentsSummary(startDate, endDate int64) (map[str
 	}
 
 	return summary, nil
+}
+
+// PurgePayments clears all payments from the Redis stream.
+func (p *PaymentProcessor) PurgePayments() error {
+	_, err := p.RDB.XTrimMaxLen(p.CTX, "payments", 0).Result()
+	if err != nil {
+		logs.ShowLogs(fmt.Sprintf("Failed to purge payments: %v", err))
+		return err
+	}
+	logs.ShowLogs("Payments purged successfully")
+	return nil
 }

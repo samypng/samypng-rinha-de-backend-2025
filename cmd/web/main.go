@@ -49,6 +49,7 @@ func main() {
 
 	app.Post("/payments", handlers.PaymentHandler)
 	app.Get("/payments-summary", handlers.PaymentsSummaryHandler)
+	app.Post("/purge-payments", handlers.PurgePaymentsHandler)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)

@@ -36,14 +36,13 @@ func (h *Handlers) PaymentHandler(c *fiber.Ctx) error {
 func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 	fromISO := c.Query("from")
 	toISO := c.Query("to")
-	logs.ShowLogs("Fetching payments summary from " + fromISO + " to " + toISO)
-
 	var fromTime time.Time
 	fromTime = time.Unix(0, 0)
 	var err error
 	if fromISO != "" {
 		fromTime, err = time.Parse(time.RFC3339, fromISO)
 		if err != nil {
+			logs.ShowLogs("Error parsing 'from' time: " + err.Error())
 			return c.SendStatus(http.StatusBadRequest)
 		}
 	}
@@ -53,6 +52,7 @@ func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 	if toISO != "" {
 		toTime, err = time.Parse(time.RFC3339, toISO)
 		if err != nil {
+			logs.ShowLogs("Error parsing 'to' time: " + err.Error())
 			return c.SendStatus(http.StatusBadRequest)
 		}
 	}
@@ -62,6 +62,7 @@ func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 
 	summary, err := h.Processor.GetPaymentsSummary(from, to)
 	if err != nil {
+		logs.ShowLogs("Error retrieving payments summary: " + err.Error())
 		return c.SendStatus(http.StatusInternalServerError)
 	}
 
@@ -78,4 +79,23 @@ func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 		}
 	}
 	return c.Status(http.StatusOK).JSON(summary)
+}
+
+// PurgePaymentsHandler clears all payments from the Redis stream.
+func (h *Handlers) PurgePaymentsHandler(c *fiber.Ctx) error {
+	if err := h.Processor.PurgePayments(); err != nil {
+		logs.ShowLogs("Error purging payments: " + err.Error())
+		return c.SendStatus(http.StatusInternalServerError)
+	}
+	if err := h.Processor.RDB.Del(h.Processor.CTX, "payment_hosts:health_status").Err(); err != nil {
+		logs.ShowLogs("Error deleting payment hosts health status: " + err.Error())
+		return c.SendStatus(http.StatusInternalServerError)
+	}
+
+	if err := h.Processor.RDB.Del(h.Processor.CTX, "payments_by_date").Err(); err != nil {
+		logs.ShowLogs("Error deleting payments by date: " + err.Error())
+		return c.SendStatus(http.StatusInternalServerError)
+	}
+	logs.ShowLogs("Payments purged successfully")
+	return c.SendStatus(http.StatusOK)
 }
