@@ -1,9 +1,6 @@
 x-service-templates:
   rinha-backend: &rinha-backend
     image: samsam1997/rinha-backend-2025:4.0
-    build:
-      context: .
-      dockerfile: Dockerfile
     environment:
       - REDIS_ADDR=redis:6379
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
