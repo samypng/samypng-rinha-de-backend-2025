@@ -4,6 +4,7 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"net/http"
+	"rinha-backend-2025/internal/helpers/logs"
 	internal "rinha-backend-2025/internal/payment"
 	"rinha-backend-2025/internal/types"
 	"time"
@@ -38,6 +39,7 @@ func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 	if fromISO == "" || toISO == "" {
 		return c.SendStatus(http.StatusBadRequest)
 	}
+	logs.ShowLogs("Fetching payments summary from " + fromISO + " to " + toISO)
 
 	fromTime, err := time.Parse(time.RFC3339, fromISO)
 	if err != nil {
