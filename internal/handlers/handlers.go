@@ -36,18 +36,25 @@ func (h *Handlers) PaymentHandler(c *fiber.Ctx) error {
 func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 	fromISO := c.Query("from")
 	toISO := c.Query("to")
-	if fromISO == "" || toISO == "" {
-		return c.SendStatus(http.StatusBadRequest)
-	}
 	logs.ShowLogs("Fetching payments summary from " + fromISO + " to " + toISO)
 
-	fromTime, err := time.Parse(time.RFC3339, fromISO)
-	if err != nil {
-		return c.SendStatus(http.StatusBadRequest)
+	var fromTime time.Time
+	fromTime = time.Unix(0, 0)
+	var err error
+	if fromISO != "" {
+		fromTime, err = time.Parse(time.RFC3339, fromISO)
+		if err != nil {
+			return c.SendStatus(http.StatusBadRequest)
+		}
 	}
-	toTime, err := time.Parse(time.RFC3339, toISO)
-	if err != nil {
-		return c.SendStatus(http.StatusBadRequest)
+
+	var toTime time.Time
+	toTime = time.Unix(time.Now().UTC().Unix(), time.Now().UTC().UnixNano())
+	if toISO != "" {
+		toTime, err = time.Parse(time.RFC3339, toISO)
+		if err != nil {
+			return c.SendStatus(http.StatusBadRequest)
+		}
 	}
 
 	from := fromTime.Unix()
