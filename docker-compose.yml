@@ -1,6 +1,6 @@
 x-service-templates:
   rinha-backend: &rinha-backend
-    image: samsam1997/rinha-backend-2025:2.0
+    image: samsam1997/rinha-backend-2025:3.0
     environment:
       - REDIS_ADDR=redis:6379
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
