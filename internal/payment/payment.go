@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"rinha-backend-2025/internal/helpers/logs"
 	"rinha-backend-2025/internal/types"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -101,8 +101,6 @@ func (wp *WorkerPool) Stop() {
 
 // worker processes payments from the payment channel.
 func (wp *WorkerPool) worker() {
-	defer wp.wg.Done()
-
 	for {
 		select {
 		case payment, ok := <-wp.paymentChan:
@@ -140,7 +138,7 @@ func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 	}
 
 	RequestedAt := time.Now().UTC()
-	payment.RequestedAt = RequestedAt.Format(time.RFC3339)
+	payment.RequestedAt = RequestedAt.Format(time.RFC3339Nano)
 	paymentData, err := p.preparePaymentData(payment)
 	if err != nil {
 		return p.handlePaymentError(payment, err, "failed to marshal payment data")
@@ -148,7 +146,7 @@ func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 
 	isDefaultProcessor, err = p.sendPaymentRequest(paymentHost, paymentData, isDefaultProcessor)
 	if err != nil {
-		(fmt.Sprintf("Payment processing failed for %s: %v", payment.CorrelationID, err))
+		logs.ShowLogs(fmt.Sprintf("Payment processing failed for %s: %v", payment.CorrelationID, err))
 		return p.handlePaymentError(payment, err, "failed to process payment")
 	}
 
@@ -223,12 +221,8 @@ func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []
 func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultProcessor bool, RequestedAt time.Time) error {
 	payment.IsDefaultProcessor = isDefaultProcessor
 	pipe := p.RDB.Pipeline()
-	requestedAtUnix := RequestedAt.Unix()
-
-	pipe.ZAdd(p.CTX, "payments_by_date", redis.Z{
-		Score:  float64(requestedAtUnix),
-		Member: fmt.Sprintf("%s|%.2f|%t", payment.CorrelationID, payment.Amount, payment.IsDefaultProcessor),
-	})
+	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
+	pipe.HSet(p.CTX, "payments:processed", payment.CorrelationID, string(paymentBytes))
 	_, err := pipe.Exec(p.CTX)
 	return err
 }
@@ -346,11 +340,8 @@ func (p *PaymentProcessor) ProcessStream() error {
 }
 
 // GetPaymentsSummary retrieves the payment summary for a given date range.
-func (p *PaymentProcessor) GetPaymentsSummary(startDate, endDate int64) (map[string]*types.PaymentSummary, error) {
-	members, err := p.RDB.ZRangeByScore(p.CTX, "payments_by_date", &redis.ZRangeBy{
-		Min: fmt.Sprintf("%d", startDate),
-		Max: fmt.Sprintf("%d", endDate),
-	}).Result()
+func (p *PaymentProcessor) GetPaymentsSummary(startDate, endDate time.Time) (map[string]*types.PaymentSummary, error) {
+	payments, err := p.RDB.HGetAll(p.CTX, "payments:processed").Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to query payments by date range: %w", err)
 	}
@@ -359,29 +350,30 @@ func (p *PaymentProcessor) GetPaymentsSummary(startDate, endDate int64) (map[str
 	summary["default"] = &types.PaymentSummary{}
 	summary["fallback"] = &types.PaymentSummary{}
 
-	for _, member := range members {
-		parts := strings.Split(member, "|")
-		if len(parts) != 3 {
+	for _, paymentData := range payments {
+		var payment types.Payment
+		if err := sonic.ConfigFastest.Unmarshal([]byte(paymentData), &payment); err != nil {
 			continue
 		}
-		amount, err := strconv.ParseFloat(parts[1], 64)
+		requestedAt, err := time.Parse(time.RFC3339Nano, payment.RequestedAt)
 		if err != nil {
+			logs.ShowLogs(fmt.Sprintf("Error parsing payment requested at time: %v", err))
 			continue
 		}
-		isDefaultProcessor, err := strconv.ParseBool(parts[2])
-		if err != nil {
+		if requestedAt.Before(startDate) || requestedAt.After(endDate) {
 			continue
 		}
-
 		key := "default"
-		if !isDefaultProcessor {
+		if !payment.IsDefaultProcessor {
 			key = "fallback"
 		}
 
 		summary[key].TotalRequests++
-		summary[key].TotalAmount += amount
-	}
 
+		summary[key].TotalAmount += payment.Amount
+	}
+	summary["default"].TotalAmount = math.Round(summary["default"].TotalAmount*10) / 10
+	summary["fallback"].TotalAmount = math.Round(summary["fallback"].TotalAmount*10) / 10
 	return summary, nil
 }
 

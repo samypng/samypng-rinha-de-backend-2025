@@ -40,7 +40,7 @@ func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 	fromTime = time.Unix(0, 0)
 	var err error
 	if fromISO != "" {
-		fromTime, err = time.Parse(time.RFC3339, fromISO)
+		fromTime, err = time.Parse(time.RFC3339Nano, fromISO)
 		if err != nil {
 			logs.ShowLogs("Error parsing 'from' time: " + err.Error())
 			return c.SendStatus(http.StatusBadRequest)
@@ -50,17 +50,14 @@ func (h *Handlers) PaymentsSummaryHandler(c *fiber.Ctx) error {
 	var toTime time.Time
 	toTime = time.Unix(time.Now().UTC().Unix(), time.Now().UTC().UnixNano())
 	if toISO != "" {
-		toTime, err = time.Parse(time.RFC3339, toISO)
+		toTime, err = time.Parse(time.RFC3339Nano, toISO)
 		if err != nil {
 			logs.ShowLogs("Error parsing 'to' time: " + err.Error())
 			return c.SendStatus(http.StatusBadRequest)
 		}
 	}
 
-	from := fromTime.Unix()
-	to := toTime.Unix()
-
-	summary, err := h.Processor.GetPaymentsSummary(from, to)
+	summary, err := h.Processor.GetPaymentsSummary(fromTime, toTime)
 	if err != nil {
 		logs.ShowLogs("Error retrieving payments summary: " + err.Error())
 		return c.SendStatus(http.StatusInternalServerError)

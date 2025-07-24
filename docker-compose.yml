@@ -1,12 +1,13 @@
 x-service-templates:
   rinha-backend: &rinha-backend
-    image: samsam1997/rinha-backend-2025:4.0
+    image: samsam1997/rinha-backend-2025:lastest
+    pull_policy: always
     environment:
       - REDIS_ADDR=redis:6379
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
-      - PAYMENT_WORKERS=200
-      - PAYMENT_CHANNEL_SIZE=1000
+      - PAYMENT_WORKERS=50
+      - PAYMENT_CHANNEL_SIZE=100
       - DEBUG=false
     depends_on:
       redis:
@@ -25,7 +26,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
+          cpus: "0.30"
           memory: "200MB"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -76,7 +77,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.4"
+          cpus: "0.2"
           memory: "50MB"
 networks:
   rinha-network:
