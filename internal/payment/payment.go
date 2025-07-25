@@ -27,6 +27,7 @@ var (
 type PaymentProcessor struct {
 	RDB         *redis.Client
 	CTX         context.Context
+	Cancel      context.CancelFunc
 	workerPool  *WorkerPool
 	client      *http.Client
 	paymentChan chan types.Payment
@@ -37,11 +38,12 @@ type WorkerPool struct {
 	paymentChan chan types.Payment
 	wg          sync.WaitGroup
 	ctx         context.Context
+	cancel      context.CancelFunc
 	processor   *PaymentProcessor
 }
 
 // NewPaymentProcessor initializes a new PaymentProcessor with a Redis client and context.
-func NewPaymentProcessor(ctx context.Context, rdb *redis.Client, client *http.Client) *PaymentProcessor {
+func NewPaymentProcessor(ctx context.Context, cancel context.CancelFunc, rdb *redis.Client, client *http.Client) *PaymentProcessor {
 	var numWorkers int
 	if envWorkers := os.Getenv("PAYMENT_WORKERS"); envWorkers != "" {
 		nw, err := strconv.Atoi(envWorkers)
@@ -69,6 +71,7 @@ func NewPaymentProcessor(ctx context.Context, rdb *redis.Client, client *http.Cl
 	processor := &PaymentProcessor{
 		RDB:         rdb,
 		CTX:         ctx,
+		Cancel:      cancel,
 		paymentChan: paymentChan,
 		client:      client,
 	}
@@ -77,6 +80,7 @@ func NewPaymentProcessor(ctx context.Context, rdb *redis.Client, client *http.Cl
 		numWorkers:  numWorkers,
 		paymentChan: paymentChan,
 		ctx:         ctx,
+		cancel:      cancel,
 		processor:   processor,
 	}
 
@@ -94,13 +98,14 @@ func (wp *WorkerPool) Start() {
 
 // Stop gracefully stops the worker pool by closing the payment channel and waiting for workers to finish.
 func (wp *WorkerPool) Stop() {
-	wp.ctx.Done()
+	wp.cancel()
 	close(wp.paymentChan)
 	wp.wg.Wait()
 }
 
 // worker processes payments from the payment channel.
 func (wp *WorkerPool) worker() {
+	defer wp.wg.Done()
 	for {
 		select {
 		case payment, ok := <-wp.paymentChan:
@@ -315,6 +320,10 @@ func (p *PaymentProcessor) SendPaymentToStream(payment types.Payment) error {
 // ProcessStream processes payments from the Redis stream.
 func (p *PaymentProcessor) ProcessStream() error {
 	for {
+		select {
+		case <-p.CTX.Done():
+			return nil
+		default:
 		streams, err := p.RDB.XReadGroup(p.CTX, &redis.XReadGroupArgs{
 			Group:    "payment-group",
 			Consumer: "payment-consumer",
@@ -333,9 +342,9 @@ func (p *PaymentProcessor) ProcessStream() error {
 					continue
 				}
 				p.paymentChan <- payment
+				}
 			}
 		}
-
 	}
 }
 

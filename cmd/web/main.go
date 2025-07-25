@@ -31,7 +31,7 @@ func main() {
 		Addr: os.Getenv("REDIS_ADDR"),
 		DB:   0,
 	})
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		log.Fatalf("Could not connect to Redis: %v", err)
 		return
@@ -41,7 +41,7 @@ func main() {
 		return
 	}
 	handlers := &handlers.Handlers{
-		Processor: internal.NewPaymentProcessor(ctx, rdb, &http.Client{}),
+		Processor: internal.NewPaymentProcessor(ctx, cancel, rdb, &http.Client{}),
 	}
 
 	handlers.Processor.StartWorkerPool()
