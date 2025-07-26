@@ -43,8 +43,8 @@ Internet → Nginx (port 9999) → [Backend1, Backend2] → Redis Streams
 - **Instâncias Backend:** 2 (0.5 CPU, 50MB cada)
 - **Nginx:** 0.4 CPU, 50MB
 - **Redis:** 0.1 CPU, 200MB
-- **Workers por instância:** 150 (configurável)
-- **Stream Buffer:** 1000 pagamentos por instância
+- **Workers por instância:** 50 (configurável)
+- **Stream Buffer:** 100 pagamentos por instância
 - **Processing Mode:** Real-time streaming
 
 ---
@@ -189,3 +189,52 @@ Este projeto é parte da Rinha de Backend 2025 e está disponível para fins edu
 ## 🏆 Resultados
 
 *Os resultados dos testes de carga serão atualizados após a execução oficial da Rinha de Backend 2025.*
+
+Resultados Parcial
+
+```json
+{
+  "participante": "samypng-go",
+  "total_liquido": 331235.998870887,
+  "total_bruto": 333265.3,
+  "total_taxas": 21489.015,
+  "descricao": "'total_liquido' é sua pontuação final. Equivale ao seu lucro. Fórmula: total_liquido + (total_liquido * p99.bonus) - (total_liquido * multa.porcentagem)",
+  "p99": {
+    "valor": "7.879218400000021ms",
+    "bonus": 0.062415631999999575,
+    "max_requests": "550",
+    "descricao": "Fórmula para o bônus: max((11 - p99.valor) * 0.02, 0)"
+  },
+  "multa": {
+    "porcentagem": 0,
+    "total": 0,
+    "composicao": {
+      "total_inconsistencias": 0,
+      "descricao": "Se 'total_inconsistencias' > 0, há multa de 35%."
+    }
+  },
+  "lag": {
+    "num_pagamentos_total": 16747,
+    "num_pagamentos_solicitados": 16747,
+    "lag": 0,
+    "descricao": "Lag é a diferença entre a quantidade de solicitações de pagamentos vs o que foi realmente computado pelo backend. Mostra a perda de pagamentos possivelmente por estarem enfileirados."
+  },
+  "pagamentos_solicitados": {
+    "qtd_sucesso": 16747,
+    "qtd_falha": 0,
+    "descricao": "'qtd_sucesso' foram requests bem sucedidos para 'POST /payments' e 'qtd_falha' os requests com erro."
+  },
+  "pagamentos_realizados_default": {
+    "total_bruto": 285007.8,
+    "num_pagamentos": 14322,
+    "total_taxas": 14250.39,
+    "descricao": "Informações do backend sobre solicitações de pagamento para o Payment Processor Default."
+  },
+  "pagamentos_realizados_fallback": {
+    "total_bruto": 48257.5,
+    "num_pagamentos": 2425,
+    "total_taxas": 7238.625,
+    "descricao": "Informações do backend sobre solicitações de pagamento para o Payment Processor Fallback."
+  }
+}
+```
