@@ -1,14 +1,10 @@
 x-service-templates:
   rinha-backend: &rinha-backend
-    image: samsam1997/rinha-backend-2025:lastest
-    pull_policy: always
-    environment:
-      - REDIS_ADDR=redis:6379
-      - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
-      - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
-      - PAYMENT_WORKERS=50
-      - PAYMENT_CHANNEL_SIZE=100
-      - DEBUG=false
+    #image: samsam1997/rinha-backend-2025:lastest
+    #pull_policy: always
+    build:
+      context: .
+      dockerfile: Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -20,16 +16,18 @@ services:
   redis:
     image: redis:7-alpine
     container_name: rinha-redis
-    command: redis-server --save "" --appendonly no --maxclients 20000 
+    command: sh -c "mkdir -p /sockets && chmod 777 /sockets && redis-server --save '' --appendonly no --maxclients 20000 --unixsocket /sockets/redis.sock --unixsocketperm 777"
     networks:
       - rinha-network
+    volumes:
+      - sockets:/sockets:rw
     deploy:
       resources:
         limits:
           cpus: "0.30"
           memory: "200MB"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-s", "/sockets/redis.sock", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -41,6 +39,16 @@ services:
     networks:
       - rinha-network
       - payment-processor
+    volumes:
+      - sockets:/sockets:rw
+    environment:
+      - REDIS_ADDR=/sockets/redis.sock
+      - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
+      - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
+      - PAYMENT_WORKERS=50
+      - PAYMENT_CHANNEL_SIZE=100
+      - DEBUG=false
+      - SOCKET_PATH=/sockets/actix.sock.2
     deploy:
       resources:
         limits:
@@ -54,6 +62,16 @@ services:
     networks:
       - rinha-network
       - payment-processor
+    volumes:
+      - sockets:/sockets:rw
+    environment:
+      - REDIS_ADDR=/sockets/redis.sock
+      - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
+      - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
+      - PAYMENT_WORKERS=50
+      - PAYMENT_CHANNEL_SIZE=100
+      - DEBUG=false
+      - SOCKET_PATH=/sockets/actix.sock.1
     deploy:
       resources:
         limits:
@@ -67,6 +85,7 @@ services:
       - "9999:9999"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - sockets:/sockets:rw
     depends_on:
       backend1:
         condition: service_started
@@ -79,6 +98,9 @@ services:
         limits:
           cpus: "0.2"
           memory: "50MB"
+volumes:
+  sockets:
+    driver: local
 networks:
   rinha-network:
     driver: bridge

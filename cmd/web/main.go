@@ -2,9 +2,8 @@ package main
 
 import (
 	"context"
-	"github.com/bytedance/sonic"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,12 +12,30 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bytedance/sonic"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 )
 
 func main() {
 	debug := os.Getenv("DEBUG")
+	socketPath := os.Getenv("SOCKET_PATH")
+
+	if err := os.RemoveAll(socketPath); err != nil {
+		log.Fatalf("Could not remove old socket file: %v", err)
+		return
+	}
+	unixListener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		log.Fatalf("Could not listen on socket: %v", err)
+		return
+	}
+	if err := os.Chmod(socketPath, 0777); err != nil {
+		log.Fatalf("Could not change socket file permissions: %v", err)
+		return
+	}
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: false,
 		JSONEncoder:           sonic.Marshal,
@@ -28,21 +45,32 @@ func main() {
 		app.Use(logger.New())
 	}
 	rdb := redis.NewClient(&redis.Options{
-		Addr: os.Getenv("REDIS_ADDR"),
-		DB:   0,
+		Network: "unix",
+		Addr:    os.Getenv("REDIS_ADDR"),
+		DB:      0,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		log.Fatalf("Could not connect to Redis: %v", err)
 		return
 	}
-	err := rdb.XGroupCreateMkStream(ctx, "payments", "payment-group", "0").Err()
+	err = rdb.XGroupCreateMkStream(ctx, "payments", "payment-group", "0").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		return
 	}
 	handlers := &handlers.Handlers{
-		Processor: internal.NewPaymentProcessor(ctx, cancel, rdb, &http.Client{}),
-	}
+		Processor: internal.NewPaymentProcessor(ctx, cancel, rdb, &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConns:        100,              // Maximum number of idle connections
+				MaxIdleConnsPerHost: 10,               // Maximum idle connections per host
+				IdleConnTimeout:     90 * time.Second, // Timeout for idle connections
+				DisableKeepAlives:   false,            // Enable connection reuse
+				DialContext: (&net.Dialer{
+					Timeout:   10 * time.Second, // Connection timeout
+					KeepAlive: 30 * time.Second, // Keep-alive duration
+				}).DialContext,
+			},
+		})}
 
 	handlers.Processor.StartWorkerPool()
 	go handlers.Processor.ProcessStream()
@@ -55,7 +83,7 @@ func main() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		if err := app.Listen(":8000"); err != nil {
+		if err := app.Listener(unixListener); err != nil {
 			log.Printf("Error starting server: %v", err)
 		}
 	}()
@@ -64,6 +92,7 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer func() {
+
 		if err := rdb.Close(); err != nil {
 			log.Printf("Error closing Redis client: %v", err)
 		}
