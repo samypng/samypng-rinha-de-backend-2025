@@ -155,7 +155,7 @@ func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 		return p.handlePaymentError(payment, err, "failed to process payment")
 	}
 
-	err = p.savePaymentToRedis(payment, isDefaultProcessor, RequestedAt)
+	err = p.savePaymentToRedis(payment, isDefaultProcessor)
 	if err != nil {
 		logs.ShowLogs(fmt.Sprintf("Failed to save payment to Redis: %v", err))
 		return p.handlePaymentError(payment, err, "failed to save payment to Redis")
@@ -223,7 +223,7 @@ func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []
 }
 
 // Helper function to save payment to Redis
-func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultProcessor bool, RequestedAt time.Time) error {
+func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultProcessor bool) error {
 	payment.IsDefaultProcessor = isDefaultProcessor
 	pipe := p.RDB.Pipeline()
 	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
@@ -391,6 +391,11 @@ func (p *PaymentProcessor) PurgePayments() error {
 	_, err := p.RDB.XTrimMaxLen(p.CTX, "payments", 0).Result()
 	if err != nil {
 		logs.ShowLogs(fmt.Sprintf("Failed to purge payments: %v", err))
+		return err
+	}
+	_, err = p.RDB.Del(p.CTX, "payments:processed").Result()
+	if err != nil {
+		logs.ShowLogs(fmt.Sprintf("Failed to clear processed payments: %v", err))
 		return err
 	}
 	logs.ShowLogs("Payments purged successfully")
