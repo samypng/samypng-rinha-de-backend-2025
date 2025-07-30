@@ -23,14 +23,14 @@ services:
   redis:
     image: redis:8-alpine
     container_name: rinha-redis
-    command: redis-server --save "" --appendonly no
+    command: redis-server --save "" --appendonly no --maxclients 20000 --timeout 300 --tcp-keepalive 300 --tcp-backlog 8192 --io-threads 2 --io-threads-do-reads yes --loglevel notice
     networks:
       - rinha-network
     deploy:
       resources:
         limits:
           cpus: "0.30"
-          memory: "100MB"
+          memory: "200MB"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -48,7 +48,7 @@ services:
       resources:
         limits:
           cpus: "0.5"
-          memory: "100MB"
+          memory: "50MB"
 
   backend2:
     <<: *rinha-backend
@@ -61,7 +61,7 @@ services:
       resources:
         limits:
           cpus: "0.5"
-          memory: "100MB"
+          memory: "50MB"
 
   nginx:
     image: nginx:alpine
