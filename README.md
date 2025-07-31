@@ -3,7 +3,7 @@
 ## 📋 Submissão
 
 **Participante:** Samuel Silva  
-**Tecnologias:** Go, Fiber, Redis, Nginx, Docker  
+**Tecnologias:** Go, Fiber, Redis, Haproxy, Docker  
 **Repositório da Rinha:** [rinha-de-backend-2025](https://github.com/zanfranceschi/rinha-de-backend-2025)
 **Repositório:** [rinha-de-backend-2025-go](https://github.com/samypng/rinha-de-backend-2025-go)  
 **Contato:** samuelsilva1997@hotmail.com  
@@ -12,7 +12,7 @@
 
 ## 🚀 Sobre o Projeto
 
-Esta é uma implementação para a Rinha de Backend 2025, focada em processamento de pagamentos com alta concorrência. A solução utiliza **streaming architecture** com **worker pools** para processar pagamentos em tempo real, **Redis** para filas e cache, e **nginx** para balanceamento de carga.
+Esta é uma implementação para a Rinha de Backend 2025, focada em processamento de pagamentos com alta concorrência. A solução utiliza **streaming architecture** com **worker pools** para processar pagamentos em tempo real, **Redis** para filas e cache, e **Haproxy** para balanceamento de carga.
 
 ### 🎯 Características Principais
 
@@ -21,7 +21,7 @@ Esta é uma implementação para a Rinha de Backend 2025, focada em processament
 - ✅ **Queue** - Filas Redis para reprocessamento de pagamentos
 - ✅ **Health Checks** - Verificação automática de saúde dos provedores de pagamento
 - ✅ **Fallback Strategy** - Alternância automática entre provedores primário/secundário
-- ✅ **Load Balancing** - Nginx com round-robin entre 2 instâncias
+- ✅ **Load Balancing** - Haproxy com round-robin entre 2 instâncias
 - ✅ **Real-time Processing** - Streaming de pagamentos para baixa latência
 
 ---
@@ -29,7 +29,7 @@ Esta é uma implementação para a Rinha de Backend 2025, focada em processament
 ## 🏗️ Arquitetura
 
 ```
-Internet → Nginx (port 9999) → [Backend1, Backend2] → Redis Streams
+Internet → Haproxy (port 9999) → [Backend1, Backend2] → Redis Streams
                                      ↓         ↓              ↓
                                Worker Pool Worker Pool   Stream Consumer
                                      ↓         ↓              ↓
@@ -41,7 +41,7 @@ Internet → Nginx (port 9999) → [Backend1, Backend2] → Redis Streams
 - **CPU Total:** 1.5 unidades
 - **Memória Total:** 350MB
 - **Instâncias Backend:** 2 (0.5 CPU, 50MB cada)
-- **Nginx:** 0.4 CPU, 50MB
+- **Haproxy:** 0.4 CPU, 50MB
 - **Redis:** 0.1 CPU, 200MB
 - **Workers por instância:** 50 (configurável)
 - **Stream Buffer:** 100 pagamentos por instância
@@ -101,7 +101,7 @@ GET /payments-summary
 O projeto utiliza uma arquitetura multi-container com streaming:
 
 - **backend1/backend2:** Instâncias da aplicação Go com stream processing
-- **nginx:** Load balancer na porta 9999
+- **Haproxy:** Load balancer na porta 9999
 - **redis:** Redis Streams, filas e cache de health checks
 - **payment-processors:** Serviços externos simulados
 
@@ -134,7 +134,7 @@ cd rinha-de-backend-2025-go
 ### 🔗 URLs dos Serviços
 
 - **API Principal:** http://localhost:9999
-- **Nginx:** http://localhost:9999
+- **Haproxy:** http://localhost:9999
 - **Backend 1:** http://localhost:8000 (interno)
 - **Backend 2:** http://localhost:8001 (interno)
 - **Payment Processor (Default):** http://localhost:8001
