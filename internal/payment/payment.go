@@ -1,13 +1,11 @@
 package internal
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
+	"github.com/valyala/fasthttp"
 	"log"
 	"math"
-	"net/http"
 	"os"
 	"rinha-backend-2025/internal/helpers/logs"
 	"rinha-backend-2025/internal/types"
@@ -29,7 +27,7 @@ type PaymentProcessor struct {
 	CTX         context.Context
 	Cancel      context.CancelFunc
 	workerPool  *WorkerPool
-	client      *http.Client
+	client      *fasthttp.Client
 	paymentChan chan types.Payment
 }
 
@@ -43,7 +41,7 @@ type WorkerPool struct {
 }
 
 // NewPaymentProcessor initializes a new PaymentProcessor with a Redis client and context.
-func NewPaymentProcessor(ctx context.Context, cancel context.CancelFunc, rdb *redis.Client, client *http.Client) *PaymentProcessor {
+func NewPaymentProcessor(ctx context.Context, cancel context.CancelFunc, rdb *redis.Client, client *fasthttp.Client) *PaymentProcessor {
 	var numWorkers int
 	if envWorkers := os.Getenv("PAYMENT_WORKERS"); envWorkers != "" {
 		nw, err := strconv.Atoi(envWorkers)
@@ -203,21 +201,31 @@ func (p *PaymentProcessor) preparePaymentData(payment types.Payment) ([]byte, er
 func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []byte, isDefaultProcessor bool) (bool, error) {
 	for {
 		host := fmt.Sprintf("%s/payments", paymentHost)
-		req, _ := http.NewRequestWithContext(p.CTX, http.MethodPost, host, io.NopCloser(bytes.NewBuffer(paymentData)))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := p.client.Do(req)
+		req := fasthttp.AcquireRequest()
+		resp := fasthttp.AcquireResponse()
+		defer fasthttp.ReleaseRequest(req)
+		defer fasthttp.ReleaseResponse(resp)
+
+		req.SetRequestURI(host)
+		req.Header.SetMethod("POST")
+		req.Header.SetContentType("application/json")
+		req.SetBody(paymentData)
+
+		err := p.client.Do(req, resp)
 		if err != nil {
 			return isDefaultProcessor, err
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity {
+
+		statusCode := resp.StatusCode()
+		if statusCode != fasthttp.StatusOK && statusCode != fasthttp.StatusUnprocessableEntity {
 			if isDefaultProcessor {
 				paymentHost = PaymentHostFallback
 				isDefaultProcessor = false
 				continue
 			}
-			return isDefaultProcessor, fmt.Errorf("payment processing failed with status code: %d", resp.StatusCode)
+			return isDefaultProcessor, fmt.Errorf("payment processing failed with status code: %d", statusCode)
 		}
+
 		return isDefaultProcessor, nil
 	}
 }
@@ -274,26 +282,35 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 // GetHealthCheck queries the health endpoint of the payment host and returns its health status.
 func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHostHealthStatusPayload, error) {
 	healthCheckHost := fmt.Sprintf("%s/payments/service-health", paymentHost)
-	healthCheckResponse, err := p.client.Get(healthCheckHost)
+
+	req := fasthttp.AcquireRequest()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.SetRequestURI(healthCheckHost)
+	req.Header.SetMethod("GET")
+
+	err := p.client.Do(req, resp)
 	if err != nil {
 		return types.PaymentHostHealthStatusPayload{}, err
 	}
-	if healthCheckResponse.StatusCode != http.StatusOK {
+
+	statusCode := resp.StatusCode()
+	if statusCode != fasthttp.StatusOK {
 		return types.PaymentHostHealthStatusPayload{
 			Failing:         false,
 			MinResponseTime: 0,
 		}, nil
 	}
-	defer healthCheckResponse.Body.Close()
-	body, err := io.ReadAll(healthCheckResponse.Body)
-	if err != nil {
-		return types.PaymentHostHealthStatusPayload{}, err
-	}
+
+	body := resp.Body()
 	var paymentHostHealthStatusPayload types.PaymentHostHealthStatusPayload
 	err = sonic.ConfigFastest.Unmarshal(body, &paymentHostHealthStatusPayload)
 	if err != nil {
 		return types.PaymentHostHealthStatusPayload{}, err
 	}
+
 	return paymentHostHealthStatusPayload, nil
 }
 
@@ -324,24 +341,24 @@ func (p *PaymentProcessor) ProcessStream() error {
 		case <-p.CTX.Done():
 			return nil
 		default:
-		streams, err := p.RDB.XReadGroup(p.CTX, &redis.XReadGroupArgs{
-			Group:    "payment-group",
-			Consumer: "payment-consumer",
-			Streams:  []string{"payments", ">"},
-			Block:    0,
-			NoAck:    true,
-		}).Result()
-		if err != nil {
-			continue
-		}
-		for _, stream := range streams {
-			for _, message := range stream.Messages {
-				paymentData := message.Values["payment"].(string)
-				var payment types.Payment
-				if err := sonic.ConfigFastest.Unmarshal([]byte(paymentData), &payment); err != nil {
-					continue
-				}
-				p.paymentChan <- payment
+			streams, err := p.RDB.XReadGroup(p.CTX, &redis.XReadGroupArgs{
+				Group:    "payment-group",
+				Consumer: "payment-consumer",
+				Streams:  []string{"payments", ">"},
+				Block:    0,
+				NoAck:    true,
+			}).Result()
+			if err != nil {
+				continue
+			}
+			for _, stream := range streams {
+				for _, message := range stream.Messages {
+					paymentData := message.Values["payment"].(string)
+					var payment types.Payment
+					if err := sonic.ConfigFastest.Unmarshal([]byte(paymentData), &payment); err != nil {
+						continue
+					}
+					p.paymentChan <- payment
 				}
 			}
 		}
