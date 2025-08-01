@@ -253,7 +253,7 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 				paymentHostHealthStatusPayloadBytes, _ := sonic.ConfigFastest.Marshal(paymentHostHealthStatusPayload)
 				pipe := p.RDB.Pipeline()
 				pipe.HSet(p.CTX, "payment_hosts:health_status", paymentHost, string(paymentHostHealthStatusPayloadBytes))
-				pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*6)
+				pipe.Expire(p.CTX, "payment_hosts:health_status", time.Second*5)
 				_, err = pipe.Exec(p.CTX)
 				if err != nil {
 					logs.ShowLogs(fmt.Sprintf("Failed to set health status for payment host %s: %v", paymentHost, err))
@@ -268,7 +268,7 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 	if err != nil {
 		return true
 	}
-	return !paymentHostHealthStatusPayload.Failing && paymentHostHealthStatusPayload.MinResponseTime < 1000
+	return !paymentHostHealthStatusPayload.Failing && paymentHostHealthStatusPayload.MinResponseTime < 200
 }
 
 // GetHealthCheck queries the health endpoint of the payment host and returns its health status.
@@ -324,24 +324,24 @@ func (p *PaymentProcessor) ProcessStream() error {
 		case <-p.CTX.Done():
 			return nil
 		default:
-		streams, err := p.RDB.XReadGroup(p.CTX, &redis.XReadGroupArgs{
-			Group:    "payment-group",
-			Consumer: "payment-consumer",
-			Streams:  []string{"payments", ">"},
-			Block:    0,
-			NoAck:    true,
-		}).Result()
-		if err != nil {
-			continue
-		}
-		for _, stream := range streams {
-			for _, message := range stream.Messages {
-				paymentData := message.Values["payment"].(string)
-				var payment types.Payment
-				if err := sonic.ConfigFastest.Unmarshal([]byte(paymentData), &payment); err != nil {
-					continue
-				}
-				p.paymentChan <- payment
+			streams, err := p.RDB.XReadGroup(p.CTX, &redis.XReadGroupArgs{
+				Group:    "payment-group",
+				Consumer: "payment-consumer",
+				Streams:  []string{"payments", ">"},
+				Block:    0,
+				NoAck:    true,
+			}).Result()
+			if err != nil {
+				continue
+			}
+			for _, stream := range streams {
+				for _, message := range stream.Messages {
+					paymentData := message.Values["payment"].(string)
+					var payment types.Payment
+					if err := sonic.ConfigFastest.Unmarshal([]byte(paymentData), &payment); err != nil {
+						continue
+					}
+					p.paymentChan <- payment
 				}
 			}
 		}
