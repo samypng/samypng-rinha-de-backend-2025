@@ -23,12 +23,14 @@ var (
 )
 
 type PaymentProcessor struct {
-	RDB         *redis.Client
-	CTX         context.Context
-	Cancel      context.CancelFunc
-	workerPool  *WorkerPool
-	client      *fasthttp.Client
-	paymentChan chan types.Payment
+	RDB                        *redis.Client
+	CTX                        context.Context
+	Cancel                     context.CancelFunc
+	workerPool                 *WorkerPool
+	client                     *fasthttp.Client
+	paymentChan                chan types.Payment
+	paymentTimeoutMilliseconds int
+	retriesCountDefault        int
 }
 
 type WorkerPool struct {
@@ -58,20 +60,47 @@ func NewPaymentProcessor(ctx context.Context, cancel context.CancelFunc, rdb *re
 		pcs, err := strconv.Atoi(envPaymentChannelSize)
 		if err != nil {
 			log.Fatalf("Invalid PAYMENT_CHANNEL_SIZE value: %v", err)
+			pcs = 100
 		}
 		paymentChannelSize = pcs
 	} else {
 		paymentChannelSize = 100
 	}
 
+	var packageTimeoutMilliseconds int
+	if envTimeout := os.Getenv("PAYMENT_TIMEOUT_MILLISECONDS"); envTimeout != "" {
+		ptm, err := strconv.Atoi(envTimeout)
+		if err != nil {
+			log.Fatalf("Invalid PAYMENT_TIMEOUT_MILLISECONDS value: %v", err)
+			ptm = 1000
+		}
+		packageTimeoutMilliseconds = ptm
+	} else {
+		packageTimeoutMilliseconds = 1000
+	}
+
+	var retriesCountDefault int
+	if envRetriesCount := os.Getenv("RETRIES_COUNT_DEFAULT"); envRetriesCount != "" {
+		rcd, err := strconv.Atoi(envRetriesCount)
+		if err != nil {
+			log.Fatalf("Invalid RETRIES_COUNT_DEFAULT value: %v", err)
+			rcd = 0
+		}
+		retriesCountDefault = rcd
+	} else {
+		retriesCountDefault = 0
+	}
+
 	paymentChan := make(chan types.Payment, paymentChannelSize)
 
 	processor := &PaymentProcessor{
-		RDB:         rdb,
-		CTX:         ctx,
-		Cancel:      cancel,
-		paymentChan: paymentChan,
-		client:      client,
+		RDB:                        rdb,
+		CTX:                        ctx,
+		Cancel:                     cancel,
+		paymentChan:                paymentChan,
+		client:                     client,
+		paymentTimeoutMilliseconds: packageTimeoutMilliseconds,
+		retriesCountDefault:        retriesCountDefault,
 	}
 
 	workerPool := &WorkerPool{
@@ -135,7 +164,7 @@ func (p *PaymentProcessor) ProcessPayment(payment types.Payment) error {
 // processPaymentInternal is the actual payment processing logic
 func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 	logs.ShowLogs(fmt.Sprintf("Processing payment: %s", payment.CorrelationID))
-	paymentHost, isDefaultProcessor, err := p.determinePaymentHost()
+	paymentHost, err := p.determinePaymentHost(&payment)
 	if err != nil {
 		return p.handleUnhealthyHosts(payment, err)
 	}
@@ -147,13 +176,13 @@ func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 		return p.handlePaymentError(payment, err, "failed to marshal payment data")
 	}
 
-	isDefaultProcessor, err = p.sendPaymentRequest(paymentHost, paymentData, isDefaultProcessor)
+	err = p.sendPaymentRequest(paymentHost, paymentData)
 	if err != nil {
 		logs.ShowLogs(fmt.Sprintf("Payment processing failed for %s: %v", payment.CorrelationID, err))
 		return p.handlePaymentError(payment, err, "failed to process payment")
 	}
 
-	err = p.savePaymentToRedis(payment, isDefaultProcessor)
+	err = p.savePaymentToRedis(payment)
 	if err != nil {
 		logs.ShowLogs(fmt.Sprintf("Failed to save payment to Redis: %v", err))
 		return p.handlePaymentError(payment, err, "failed to save payment to Redis")
@@ -163,20 +192,25 @@ func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 }
 
 // Helper function to determine the payment host
-func (p *PaymentProcessor) determinePaymentHost() (string, bool, error) {
+func (p *PaymentProcessor) determinePaymentHost(payment *types.Payment) (string, error) {
 	paymentHost := PaymentHostDefault
 	isDefaultProcessor := true
 
 	if !p.IsPaymentHostHealthy(paymentHost) {
-		paymentHost = PaymentHostFallback
-		isDefaultProcessor = false
-
-		if !p.IsPaymentHostHealthy(paymentHost) {
-			return "", false, fmt.Errorf("both payment hosts are unhealthy")
+		payment.RetryCount++
+		if payment.RetryCount >= p.retriesCountDefault {
+			paymentHost = PaymentHostFallback
+			isDefaultProcessor = false
+			if !p.IsPaymentHostHealthy(paymentHost) {
+				return "", fmt.Errorf("both payment hosts are unhealthy")
+			}
+		} else {
+			return "", fmt.Errorf("payment host is unhealthy")
 		}
 	}
+	payment.IsDefaultProcessor = isDefaultProcessor
 
-	return paymentHost, isDefaultProcessor, nil
+	return paymentHost, nil
 }
 
 // Helper function to handle unhealthy hosts
@@ -198,41 +232,34 @@ func (p *PaymentProcessor) preparePaymentData(payment types.Payment) ([]byte, er
 }
 
 // Helper function to send payment request
-func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []byte, isDefaultProcessor bool) (bool, error) {
-	for {
-		host := fmt.Sprintf("%s/payments", paymentHost)
-		req := fasthttp.AcquireRequest()
-		resp := fasthttp.AcquireResponse()
-		defer fasthttp.ReleaseRequest(req)
-		defer fasthttp.ReleaseResponse(resp)
+func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []byte) error {
+	host := fmt.Sprintf("%s/payments", paymentHost)
+	req := fasthttp.AcquireRequest()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
 
-		req.SetRequestURI(host)
-		req.Header.SetMethod("POST")
-		req.Header.SetContentType("application/json")
-		req.SetBody(paymentData)
+	req.SetRequestURI(host)
+	req.Header.SetMethod("POST")
+	req.Header.SetContentType("application/json")
+	req.SetBody(paymentData)
 
-		err := p.client.Do(req, resp)
-		if err != nil {
-			return isDefaultProcessor, err
-		}
-
-		statusCode := resp.StatusCode()
-		if statusCode != fasthttp.StatusOK && statusCode != fasthttp.StatusUnprocessableEntity {
-			if isDefaultProcessor {
-				paymentHost = PaymentHostFallback
-				isDefaultProcessor = false
-				continue
-			}
-			return isDefaultProcessor, fmt.Errorf("payment processing failed with status code: %d", statusCode)
-		}
-
-		return isDefaultProcessor, nil
+	err := p.client.Do(req, resp)
+	if err != nil {
+		return err
 	}
+
+	statusCode := resp.StatusCode()
+	if statusCode != fasthttp.StatusOK && statusCode != fasthttp.StatusUnprocessableEntity {
+
+		return fmt.Errorf("payment processing failed with status code: %d", statusCode)
+	}
+
+	return nil
 }
 
 // Helper function to save payment to Redis
-func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultProcessor bool) error {
-	payment.IsDefaultProcessor = isDefaultProcessor
+func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment) error {
 	pipe := p.RDB.Pipeline()
 	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
 	pipe.HSet(p.CTX, "payments:processed", payment.CorrelationID, string(paymentBytes))
@@ -276,7 +303,7 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 	if err != nil {
 		return true
 	}
-	return !paymentHostHealthStatusPayload.Failing && paymentHostHealthStatusPayload.MinResponseTime < 1000
+	return !paymentHostHealthStatusPayload.Failing && paymentHostHealthStatusPayload.MinResponseTime <= p.paymentTimeoutMilliseconds
 }
 
 // GetHealthCheck queries the health endpoint of the payment host and returns its health status.
