@@ -5,7 +5,6 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"rinha-backend-2025/internal/handlers"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/valyala/fasthttp"
 )
 
 func main() {
@@ -41,7 +41,7 @@ func main() {
 		return
 	}
 	handlers := &handlers.Handlers{
-		Processor: internal.NewPaymentProcessor(ctx, cancel, rdb, &http.Client{}),
+		Processor: internal.NewPaymentProcessor(ctx, cancel, rdb, &fasthttp.Client{}),
 	}
 
 	handlers.Processor.StartWorkerPool()
