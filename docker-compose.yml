@@ -1,7 +1,7 @@
 x-service-templates:
   rinha-backend: &rinha-backend
-    #image: samsam1997/rinha-backend-2025:lastest
-    #pull_policy: always
+    image: samsam1997/rinha-backend-2025:test
+    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile
@@ -68,7 +68,7 @@ services:
       - REDIS_ADDR=/sockets/redis.sock
       - PAYMENT_HOST_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_HOST_FALLBACK=http://payment-processor-fallback:8080
-      - PAYMENT_WORKERS=25
+      - PAYMENT_WORKERS=50
       - PAYMENT_CHANNEL_SIZE=100
       - DEBUG=false
       - SOCKET_PATH=/sockets/actix.sock.1
