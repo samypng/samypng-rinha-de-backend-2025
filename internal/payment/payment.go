@@ -1,13 +1,10 @@
 package internal
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"math"
-	"net/http"
 	"os"
 	"rinha-backend-2025/internal/helpers/logs"
 	"rinha-backend-2025/internal/types"
@@ -17,6 +14,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/redis/go-redis/v9"
+	"github.com/valyala/fasthttp"
 )
 
 var (
@@ -29,7 +27,7 @@ type PaymentProcessor struct {
 	CTX         context.Context
 	Cancel      context.CancelFunc
 	workerPool  *WorkerPool
-	client      *http.Client
+	client      *fasthttp.Client
 	paymentChan chan types.Payment
 }
 
@@ -43,7 +41,7 @@ type WorkerPool struct {
 }
 
 // NewPaymentProcessor initializes a new PaymentProcessor with a Redis client and context.
-func NewPaymentProcessor(ctx context.Context, cancel context.CancelFunc, rdb *redis.Client, client *http.Client) *PaymentProcessor {
+func NewPaymentProcessor(ctx context.Context, cancel context.CancelFunc, rdb *redis.Client, client *fasthttp.Client) *PaymentProcessor {
 	var numWorkers int
 	if envWorkers := os.Getenv("PAYMENT_WORKERS"); envWorkers != "" {
 		nw, err := strconv.Atoi(envWorkers)
@@ -155,7 +153,7 @@ func (p *PaymentProcessor) processPaymentInternal(payment types.Payment) error {
 		return p.handlePaymentError(payment, err, "failed to process payment")
 	}
 
-	err = p.savePaymentToRedis(payment, isDefaultProcessor, RequestedAt)
+	err = p.savePaymentToRedis(payment, isDefaultProcessor)
 	if err != nil {
 		logs.ShowLogs(fmt.Sprintf("Failed to save payment to Redis: %v", err))
 		return p.handlePaymentError(payment, err, "failed to save payment to Redis")
@@ -170,12 +168,12 @@ func (p *PaymentProcessor) determinePaymentHost() (string, bool, error) {
 	isDefaultProcessor := true
 
 	if !p.IsPaymentHostHealthy(paymentHost) {
-		paymentHost = PaymentHostFallback
-		isDefaultProcessor = false
+		// paymentHost = PaymentHostFallback
+		// isDefaultProcessor = false
 
-		if !p.IsPaymentHostHealthy(paymentHost) {
-			return "", false, fmt.Errorf("both payment hosts are unhealthy")
-		}
+		// if !p.IsPaymentHostHealthy(paymentHost) {
+		return "", false, fmt.Errorf("both payment hosts are unhealthy")
+		//}
 	}
 
 	return paymentHost, isDefaultProcessor, nil
@@ -203,27 +201,42 @@ func (p *PaymentProcessor) preparePaymentData(payment types.Payment) ([]byte, er
 func (p *PaymentProcessor) sendPaymentRequest(paymentHost string, paymentData []byte, isDefaultProcessor bool) (bool, error) {
 	for {
 		host := fmt.Sprintf("%s/payments", paymentHost)
-		req, _ := http.NewRequestWithContext(p.CTX, http.MethodPost, host, io.NopCloser(bytes.NewBuffer(paymentData)))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := p.client.Do(req)
+
+		// Create fasthttp request and response objects
+		req := fasthttp.AcquireRequest()
+		resp := fasthttp.AcquireResponse()
+		defer fasthttp.ReleaseRequest(req)
+		defer fasthttp.ReleaseResponse(resp)
+
+		// Set request details
+		req.SetRequestURI(host)
+		req.Header.SetMethod("POST")
+		req.Header.SetContentType("application/json")
+		req.SetBody(paymentData)
+
+		// Perform the request
+		err := p.client.Do(req, resp)
 		if err != nil {
 			return isDefaultProcessor, err
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity {
-			if isDefaultProcessor {
-				paymentHost = PaymentHostFallback
-				isDefaultProcessor = false
-				continue
-			}
-			return isDefaultProcessor, fmt.Errorf("payment processing failed with status code: %d", resp.StatusCode)
+
+		// Check response status code
+		statusCode := resp.StatusCode()
+		if statusCode != fasthttp.StatusOK && statusCode != fasthttp.StatusUnprocessableEntity {
+			// if isDefaultProcessor {
+			// 	paymentHost = PaymentHostFallback
+			// 	isDefaultProcessor = false
+			// 	continue
+			// }
+			return isDefaultProcessor, fmt.Errorf("payment processing failed with status code: %d", statusCode)
 		}
+
 		return isDefaultProcessor, nil
 	}
 }
 
 // Helper function to save payment to Redis
-func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultProcessor bool, RequestedAt time.Time) error {
+func (p *PaymentProcessor) savePaymentToRedis(payment types.Payment, isDefaultProcessor bool) error {
 	payment.IsDefaultProcessor = isDefaultProcessor
 	pipe := p.RDB.Pipeline()
 	paymentBytes, _ := sonic.ConfigFastest.Marshal(payment)
@@ -274,26 +287,35 @@ func (p *PaymentProcessor) IsPaymentHostHealthy(paymentHost string) bool {
 // GetHealthCheck queries the health endpoint of the payment host and returns its health status.
 func (p *PaymentProcessor) GetHealthCheck(paymentHost string) (types.PaymentHostHealthStatusPayload, error) {
 	healthCheckHost := fmt.Sprintf("%s/payments/service-health", paymentHost)
-	healthCheckResponse, err := p.client.Get(healthCheckHost)
+
+	req := fasthttp.AcquireRequest()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.SetRequestURI(healthCheckHost)
+	req.Header.SetMethod("GET")
+
+	err := p.client.Do(req, resp)
 	if err != nil {
 		return types.PaymentHostHealthStatusPayload{}, err
 	}
-	if healthCheckResponse.StatusCode != http.StatusOK {
+
+	statusCode := resp.StatusCode()
+	if statusCode != fasthttp.StatusOK {
 		return types.PaymentHostHealthStatusPayload{
 			Failing:         false,
 			MinResponseTime: 0,
 		}, nil
 	}
-	defer healthCheckResponse.Body.Close()
-	body, err := io.ReadAll(healthCheckResponse.Body)
-	if err != nil {
-		return types.PaymentHostHealthStatusPayload{}, err
-	}
+
+	body := resp.Body()
 	var paymentHostHealthStatusPayload types.PaymentHostHealthStatusPayload
 	err = sonic.ConfigFastest.Unmarshal(body, &paymentHostHealthStatusPayload)
 	if err != nil {
 		return types.PaymentHostHealthStatusPayload{}, err
 	}
+
 	return paymentHostHealthStatusPayload, nil
 }
 
@@ -391,6 +413,11 @@ func (p *PaymentProcessor) PurgePayments() error {
 	_, err := p.RDB.XTrimMaxLen(p.CTX, "payments", 0).Result()
 	if err != nil {
 		logs.ShowLogs(fmt.Sprintf("Failed to purge payments: %v", err))
+		return err
+	}
+	_, err = p.RDB.Del(p.CTX, "payments:processed").Result()
+	if err != nil {
+		logs.ShowLogs(fmt.Sprintf("Failed to clear processed payments: %v", err))
 		return err
 	}
 	logs.ShowLogs("Payments purged successfully")

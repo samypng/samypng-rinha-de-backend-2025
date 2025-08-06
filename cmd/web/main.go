@@ -4,8 +4,8 @@ import (
 	"context"
 	"log"
 	"net"
-	"net/http"
 	"os"
+
 	"os/signal"
 	"rinha-backend-2025/internal/handlers"
 	"rinha-backend-2025/internal/payment"
@@ -17,6 +17,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/valyala/fasthttp"
 )
 
 func main() {
@@ -59,18 +60,8 @@ func main() {
 		return
 	}
 	handlers := &handlers.Handlers{
-		Processor: internal.NewPaymentProcessor(ctx, cancel, rdb, &http.Client{
-			Transport: &http.Transport{
-				MaxIdleConns:        100,              // Maximum number of idle connections
-				MaxIdleConnsPerHost: 10,               // Maximum idle connections per host
-				IdleConnTimeout:     90 * time.Second, // Timeout for idle connections
-				DisableKeepAlives:   false,            // Enable connection reuse
-				DialContext: (&net.Dialer{
-					Timeout:   10 * time.Second, // Connection timeout
-					KeepAlive: 30 * time.Second, // Keep-alive duration
-				}).DialContext,
-			},
-		})}
+		Processor: internal.NewPaymentProcessor(ctx, cancel, rdb, &fasthttp.Client{}),
+	}
 
 	handlers.Processor.StartWorkerPool()
 	go handlers.Processor.ProcessStream()
