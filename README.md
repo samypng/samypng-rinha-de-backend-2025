@@ -192,4 +192,4 @@ Este projeto é parte da Rinha de Backend 2025 e está disponível para fins edu
 
 Resultados Parcial pode ser encontrado [aqui](https://github.com/zanfranceschi/rinha-de-backend-2025/blob/main/participantes/samypng-go/partial-results.json)
 
-Resultado final [aqui](https://github.com/zanfranceschi/rinha-de-backend-2025/blob/main/participantes/samypng-go/partial-results.json)
+Resultado final [aqui](https://github.com/zanfranceschi/rinha-de-backend-2025/blob/main/participantes/samypng-go/final-results.json)
